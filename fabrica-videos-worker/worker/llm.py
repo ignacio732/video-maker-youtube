@@ -1,8 +1,7 @@
 """
-Generación de idea + guion con LLM gratis.
-Soporta Groq (OpenAI-compatible) y Google Gemini. Elegí con LLM_PROVIDER.
-- Groq:   LLM_PROVIDER=groq   GROQ_API_KEY=...   (https://console.groq.com  gratis)
-- Gemini: LLM_PROVIDER=gemini GEMINI_API_KEY=... (https://aistudio.google.com gratis)
+Generación de idea + guion VIRAL con LLM gratis (Groq / Gemini).
+Incorpora el playbook de virality 2026: hook en 2s, estructura de retención,
+títulos-pregunta <=60 chars, ~160 wpm, CTA con loop, SEO/GEO y formatos ganadores.
 """
 import os, json, re, requests
 
@@ -11,36 +10,73 @@ GROQ_MODEL = os.environ.get("GROQ_MODEL", "openai/gpt-oss-120b")
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-1.5-flash")
 
 SYSTEM = (
-    "Sos un guionista experto en videos virales de YouTube en español. "
-    "Escribís guiones con gancho fuerte en los primeros 3 segundos, ritmo dinámico, "
-    "lenguaje claro y llamada a la acción al final. Respondés SIEMPRE en JSON válido."
+    "Sos el mejor guionista de YouTube Shorts virales en español, experto en retención "
+    "y en el algoritmo 2026. Sabés que el 50-60% del abandono ocurre en los primeros 3 "
+    "segundos, que el gancho debe aparecer como TEXTO y VOZ a la vez, que hay que abrir un "
+    "'open loop' y pagarlo recién al final, y que el último renglón debe encadenar con el "
+    "primero (loop). Escribís frases cortas, ritmo rápido (~160 palabras/min), sin relleno. "
+    "Respondés SIEMPRE en JSON válido y en español rioplatense neutro."
 )
 
-def _prompt(channel, vtype, seed_title):
-    dur = "45-58 segundos (short vertical)" if vtype == "short" else "4 a 7 minutos (video largo)"
-    seg_hint = "6 a 9" if vtype == "short" else "12 a 20"
-    seed = f'El tema pedido es: "{seed_title}". ' if seed_title else "Elegí vos el mejor tema del nicho. "
+HOOKS = (
+    '1) Afirmación audaz/contraintuitiva: "Todo lo que sabés de X es mentira." '
+    '2) Curiosity gap: "Hay algo sobre X que nadie te cuenta." '
+    '3) Advertencia: "Nunca hagas X sin saber esto." '
+    '4) Dato shock: "El 90% no sabe que X." '
+    '5) Pregunta directa: "¿Sabías por qué X?" '
+    '6) Ranking teaser: "El número 3 te va a sorprender." '
+    '7) Secreto: "Solo unos pocos conocen esto." '
+    '8) La verdadera razón: "Esta es la razón real por la que X."'
+)
+
+def _prompt(channel, vtype, seed_title, trends):
+    if vtype == "short":
+        dur = "18 a 28 segundos"
+        seg_hint = ("6 a 8 segmentos. Cada 'text' = UNA frase corta (8-12 palabras). "
+                    "Segmento 1 = el GANCHO (aparece como texto y voz). "
+                    "Último segmento = UN solo CTA breve que además encadene con el gancho (loop).")
+    else:
+        dur = "4 a 7 minutos"
+        seg_hint = ("14 a 20 segmentos. Mantené un giro o dato nuevo cada 5-7 segundos. "
+                    "Incluí capítulos (chapters) con timestamps aproximados empezando en 0:00.")
+    seed = f'TEMA PEDIDO (respetalo): "{seed_title}".\n' if seed_title else ""
+    trend_block = ""
+    if trends:
+        lst = "\n".join(f"- {t}" for t in trends[:8])
+        trend_block = ("TEMAS DEL MOMENTO (usá uno SOLO si encaja perfecto con el nicho; "
+                       "si ninguno encaja, ignoralos y elegí el mejor tema del nicho):\n" + lst + "\n")
     return f"""Canal: {channel['name']}
 Nicho: {channel['niche']}
-Descripción: {channel.get('description') or ''}
 Tono: {channel.get('tone') or 'informativo'}
 Audiencia: {channel.get('target_audience') or 'general'}
-Idioma: español ({channel.get('language','es')})
-Formato: {vtype} — duración objetivo {dur}.
+Formato del video: {vtype} — duración objetivo {dur}.
 
-{seed}Generá un video optimizado para retención y posicionamiento.
+{seed}{trend_block}
+Plantillas de gancho probadas (elegí/adaptá la mejor): {HOOKS}
 
-Devolvé SOLO un JSON con esta forma exacta:
+Reglas de retención: gancho en los primeros 2 segundos; abrí un open loop y pagalo al final;
+frases cortas y ritmo rápido; sin introducciones ni relleno; un cambio/idea nueva cada 5-7s;
+el último renglón debe encadenar con el primero para generar re-visualización (loop).
+
+SEO/GEO: el título es una PREGUNTA o lleva un número, <=60 caracteres, con la palabra clave
+al principio. La descripción arranca respondiendo la pregunta en 1 frase (para IA/buscadores),
+luego 2-3 frases con contexto y datos, y termina con 2-3 hashtags relevantes.
+
+Devolvé SOLO un JSON con esta forma EXACTA:
 {{
-  "title": "título atractivo para YouTube (<=70 caracteres)",
-  "description": "descripción de 2-3 frases con hashtags al final",
-  "tags": ["10 a 15 tags relevantes"],
-  "hook": "la primera frase del guion, un gancho potente",
+  "title": "titulo-pregunta o con numero, <=60 caracteres",
+  "hook": "la primera frase, el gancho potente",
+  "description": "1 frase que responde + contexto + #hashtag1 #hashtag2 #hashtag3",
+  "tags": ["10 a 15 tags/keywords relevantes"],
+  "hashtags": ["3 hashtags sin #"],
+  "thumbnail_text": "2 a 4 PALABRAS en mayusculas para la miniatura",
+  "format": "uno de: datos_curiosos | ranking | historia | motivacion | quiz | explicacion",
   "segments": [
-    {{"text": "frase o par de frases narradas", "keywords": ["2-3 términos EN INGLÉS para buscar video stock que ilustre esta parte"]}}
+    {{"text": "frase narrada corta", "keywords": ["2-3 terminos EN INGLES para buscar video stock que ilustre esta frase"]}}
   ]
 }}
-Generá {seg_hint} segmentos. El 'text' de todos los segmentos unidos es el guion completo narrado. Las keywords deben ser visuales y concretas (ej: "galaxy stars", "ocean deep")."""
+{seg_hint}
+Las keywords deben ser visuales y concretas en inglés (ej: "galaxy stars", "ancient ruins", "stock market")."""
 
 def _extract_json(s):
     s = s.strip()
@@ -69,12 +105,15 @@ def _gemini(messages):
     r.raise_for_status()
     return r.json()["candidates"][0]["content"]["parts"][0]["text"]
 
-def generate(channel, vtype="short", seed_title=None):
-    """Devuelve dict con title, description, tags, hook, segments."""
+def generate(channel, vtype="short", seed_title=None, trends=None):
+    """Devuelve dict con title, hook, description, tags, hashtags, thumbnail_text, format, segments."""
     messages = [{"role": "system", "content": SYSTEM},
-                {"role": "user", "content": _prompt(channel, vtype, seed_title)}]
+                {"role": "user", "content": _prompt(channel, vtype, seed_title, trends)}]
     raw = _gemini(messages) if PROVIDER == "gemini" else _groq(messages)
     data = _extract_json(raw)
     data.setdefault("tags", [])
+    data.setdefault("hashtags", [])
+    data.setdefault("thumbnail_text", (data.get("title") or "")[:24])
+    data.setdefault("format", "datos_curiosos")
     data["full_text"] = " ".join(s["text"].strip() for s in data.get("segments", []))
     return data
