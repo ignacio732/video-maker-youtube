@@ -79,16 +79,25 @@ def get_setting(key, default=None):
     rows = _get("settings", {"key": f"eq.{key}", "select": "value"})
     return rows[0]["value"] if rows else default
 
-def upload_video(local_path, dest_name):
-    """Sube un mp4 al bucket público 'videos' de Supabase Storage y devuelve la URL pública."""
+def upload_media(local_path, dest_name, content_type="video/mp4"):
+    """Sube un archivo al bucket público 'videos' y devuelve la URL pública."""
     with open(local_path, "rb") as f:
         data = f.read()
     up = f"{URL}/storage/v1/object/videos/{dest_name}"
     h = {"apikey": KEY, "Authorization": f"Bearer {KEY}",
-         "Content-Type": "video/mp4", "x-upsert": "true"}
+         "Content-Type": content_type, "x-upsert": "true"}
     r = requests.post(up, headers=h, data=data, timeout=180)
     r.raise_for_status()
     return f"{URL}/storage/v1/object/public/videos/{dest_name}"
+
+def upload_video(local_path, dest_name):
+    return upload_media(local_path, dest_name, "video/mp4")
+
+def add_trend(channel_id, topic, source):
+    try:
+        return _post("trends", {"channel_id": channel_id, "topic": topic[:200], "source": source})
+    except Exception as e:
+        print("add_trend falló:", e)
 
 def log(step, message, level="info", vid=None, cid=None):
     try:
