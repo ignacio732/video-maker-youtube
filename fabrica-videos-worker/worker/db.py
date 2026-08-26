@@ -79,6 +79,17 @@ def get_setting(key, default=None):
     rows = _get("settings", {"key": f"eq.{key}", "select": "value"})
     return rows[0]["value"] if rows else default
 
+def upload_video(local_path, dest_name):
+    """Sube un mp4 al bucket público 'videos' de Supabase Storage y devuelve la URL pública."""
+    with open(local_path, "rb") as f:
+        data = f.read()
+    up = f"{URL}/storage/v1/object/videos/{dest_name}"
+    h = {"apikey": KEY, "Authorization": f"Bearer {KEY}",
+         "Content-Type": "video/mp4", "x-upsert": "true"}
+    r = requests.post(up, headers=h, data=data, timeout=180)
+    r.raise_for_status()
+    return f"{URL}/storage/v1/object/public/videos/{dest_name}"
+
 def log(step, message, level="info", vid=None, cid=None):
     try:
         _post("logs", {"step": step, "message": str(message)[:900],
