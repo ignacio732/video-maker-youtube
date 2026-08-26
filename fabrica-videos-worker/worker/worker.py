@@ -8,7 +8,7 @@ Uso:
   python worker.py --no-auto  # solo procesa lo que ya está en cola
 """
 import os, sys, tempfile, traceback, subprocess
-import db, render
+import db, render, trends
 
 MAX_VIDEOS = int(os.environ.get("MAX_VIDEOS_PER_RUN", "3"))
 PRIVACY = os.environ.get("YT_PRIVACY", "public")
@@ -34,10 +34,20 @@ def process_video(v):
     db.log("start", f"Procesando {vtype} de '{ch['name']}'", vid=vid, cid=ch["id"])
 
     with tempfile.TemporaryDirectory() as td:
-        # 1) GUION (LLM)
+        # 1) GUION (LLM) — con tendencias del momento como inspiración
         db.set_status(vid, "scripting")
         import llm
-        data = llm.generate(ch, vtype, seed_title=v.get("title"))
+        trend_topics = None
+        if not v.get("title"):
+            try:
+                found = trends.for_channel(ch, 8)
+                trend_topics = [t["topic"] for t in found]
+                for t in found[:5]:
+                    db.add_trend(ch["id"], t["topic"], t["source"])
+                db.log("trends", f"{len(trend_topics)} tendencias detectadas", vid=vid, cid=ch["id"])
+            except Exception as e:
+                db.log("trends", f"sin tendencias: {e}", "warn", vid, ch["id"])
+        data = llm.generate(ch, vtype, seed_title=v.get("title"), trends=trend_topics)
         db.add_script(vid, data["full_text"], data["segments"])
         db.add_idea(ch["id"], data["title"], data.get("hook"), None, vtype, "used")
         db.update_video(vid, title=data["title"],
@@ -93,6 +103,16 @@ def process_video(v):
             db.log("upload", "Video subido a Storage (visible en dashboard)", vid=vid, cid=ch["id"])
         except Exception as e:
             db.log("upload", f"No se pudo subir a Storage: {e}", "warn", vid, ch["id"])
+
+        # 5b) MINIATURA (thumbnail viral)
+        try:
+            thumb = os.path.join(td, "thumb.png")
+            render.make_thumbnail(data.get("thumbnail_text") or data["title"], pick_theme(ch), thumb)
+            thumb_url = db.upload_media(thumb, f"{ch.get('slug','canal')}/{vid}.png", "image/png")
+            db.update_video(vid, thumbnail_url=thumb_url)
+            db.add_asset(vid, "thumbnail", url=thumb_url)
+        except Exception as e:
+            db.log("thumb", f"No se pudo generar miniatura: {e}", "warn", vid, ch["id"])
 
         # 6) PUBLICAR (opcional)
         yt_tokens = db.get_setting("yt_tokens", {}) or {}
