@@ -2,13 +2,19 @@ name: Fábrica de Videos (autónomo)
 
 on:
   schedule:
-    # Corre cada 6 horas (UTC). Ajustá la cadencia a tu gusto.
+    # Corre cada 6 horas (UTC). Cambiá la cadencia si querés más/menos videos.
     - cron: "0 */6 * * *"
   workflow_dispatch:        # permite dispararlo a mano desde la pestaña Actions
 
 concurrency:
   group: fabrica-videos
   cancel-in-progress: false
+
+# Tus archivos quedaron dentro de fabrica-videos-worker/worker,
+# así que los comandos se ejecutan desde esa carpeta:
+defaults:
+  run:
+    working-directory: fabrica-videos-worker/worker
 
 jobs:
   producir:
@@ -29,14 +35,14 @@ jobs:
 
       - name: Ejecutar worker
         env:
-          SUPABASE_URL:        ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_KEY:${{ secrets.SUPABASE_SERVICE_KEY }}
-          LLM_PROVIDER:        ${{ secrets.LLM_PROVIDER }}
-          GROQ_API_KEY:        ${{ secrets.GROQ_API_KEY }}
-          GEMINI_API_KEY:      ${{ secrets.GEMINI_API_KEY }}
-          PEXELS_API_KEY:      ${{ secrets.PEXELS_API_KEY }}
-          PIXABAY_API_KEY:     ${{ secrets.PIXABAY_API_KEY }}
-          YT_CLIENT_ID:        ${{ secrets.YT_CLIENT_ID }}
-          YT_CLIENT_SECRET:    ${{ secrets.YT_CLIENT_SECRET }}
-          MAX_VIDEOS_PER_RUN:  "3"
+          SUPABASE_URL:         ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          LLM_PROVIDER:         ${{ secrets.LLM_PROVIDER }}
+          GROQ_API_KEY:         ${{ secrets.GROQ_API_KEY }}
+          GEMINI_API_KEY:       ${{ secrets.GEMINI_API_KEY }}
+          PEXELS_API_KEY:       ${{ secrets.PEXELS_API_KEY }}
+          PIXABAY_API_KEY:      ${{ secrets.PIXABAY_API_KEY }}
+          YT_CLIENT_ID:         ${{ secrets.YT_CLIENT_ID }}
+          YT_CLIENT_SECRET:     ${{ secrets.YT_CLIENT_SECRET }}
+          MAX_VIDEOS_PER_RUN:   "3"
         run: python worker.py
