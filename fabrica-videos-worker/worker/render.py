@@ -2,7 +2,7 @@
 Motor de render de la Fábrica de Videos — 100% gratis (edge-tts + ffmpeg + Pillow).
 Reutilizable por el worker autónomo y por el generador de demo.
 """
-import os, asyncio, subprocess, tempfile, math, textwrap
+import os, re, asyncio, subprocess, tempfile, math, textwrap
 import edge_tts
 from PIL import Image
 
@@ -74,32 +74,90 @@ def _ass_time(t):
     h = int(t // 3600); m = int((t % 3600) // 60); s = t % 60
     return f"{h:d}:{m:02d}:{s:05.2f}"
 
-def build_ass(words, out_ass, w=1080, h=1920, primary="&H00FFFFFF",
-              highlight="&H0057FF3D", fontsize=None, margin_v=None):
-    """Crea subtítulos ASS grandes, centrados en el tercio inferior."""
-    fontsize = fontsize or int(w * 0.062)
-    margin_v = margin_v or int(h * 0.30)
-    lines = _group_words(words)
+def build_ass(words, out_ass, w=1080, h=1920, fontsize=None, margin_v=None):
+    """
+    Subtítulos VIRALES estilo Hormozi/TikTok: palabra por palabra, MAYÚSCULAS,
+    fuente grande y gruesa, contorno negro, 'pop' de escala y palabra clave en amarillo.
+    Aprovecha los timings por palabra derivados del TTS.
+    """
+    WHITE = "&H00FFFFFF"
+    YELLOW = "&H0000FFFF"      # énfasis (BGR)
+    fontsize = fontsize or int(w * (0.095 if w < h else 0.06))
+    margin_v = margin_v or int(h * 0.34)
+    outline = max(6, int(fontsize * 0.11))
     header = f"""[Script Info]
 ScriptType: v4.00+
 PlayResX: {w}
 PlayResY: {h}
-WrapStyle: 0
+WrapStyle: 2
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, OutlineColour, BackColour, Bold, Outline, Shadow, Alignment, MarginL, MarginR, MarginV
-Style: Main,DejaVu Sans,{fontsize},{primary},&H00000000,&H00000000,-1,{max(4,int(fontsize*0.08))},2,2,60,60,{margin_v}
+Style: Main,DejaVu Sans,{fontsize},{WHITE},&H00000000,&H90000000,-1,{outline},3,2,40,40,{margin_v}
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
     body = []
-    for ln in lines:
-        txt = ln["text"].upper().replace("\n", " ")
-        body.append(f"Dialogue: 0,{_ass_time(ln['start'])},{_ass_time(ln['end'])},Main,,0,0,0,,{{\\fad(120,80)}}{txt}")
+    n = len(words)
+    for i, wd in enumerate(words):
+        start = wd["start"]
+        end = words[i + 1]["start"] if i + 1 < n else wd["end"]
+        if end <= start:
+            end = start + 0.25
+        clean = re.sub(r"[^0-9A-Za-zÁÉÍÓÚÜÑáéíóúüñ]", "", wd["text"])
+        color = YELLOW if len(clean) >= 6 else WHITE
+        txt = wd["text"].upper()
+        # pop de escala + fade rápido; palabra larga => amarillo (énfasis)
+        tag = (f"{{\\an2\\c{color}\\fad(30,20)"
+               f"\\t(0,80,\\fscx116\\fscy116)\\t(80,150,\\fscx100\\fscy100)}}")
+        body.append(f"Dialogue: 0,{_ass_time(start)},{_ass_time(end)},Main,,0,0,0,,{tag}{txt}")
     with open(out_ass, "w") as f:
         f.write(header + "\n".join(body) + "\n")
     return out_ass
+
+def make_thumbnail(text, theme, out_png, w=1280, h=720):
+    """Miniatura 1280x720: fondo con gradiente temático de alto contraste + texto grande."""
+    from PIL import ImageDraw, ImageFont
+    bg = make_gradient_bg(theme, out_png + ".bg.png", w, h)
+    img = Image.open(bg).convert("RGB")
+    d = ImageDraw.Draw(img)
+    # barra de acento
+    d.rectangle([0, 0, int(w * 0.02), h], fill=(255, 61, 87))
+    words = (text or "").upper().split()
+    # armar 2-3 líneas
+    lines, cur = [], ""
+    for wd in words:
+        if len(cur + " " + wd) > 14 and cur:
+            lines.append(cur); cur = wd
+        else:
+            cur = (cur + " " + wd).strip()
+    if cur:
+        lines.append(cur)
+    lines = lines[:3]
+    fs = int(h * (0.20 if len(lines) <= 2 else 0.15))
+    try:
+        font = ImageFont.truetype(FONT, fs)
+    except Exception:
+        font = ImageFont.load_default()
+    total_h = len(lines) * fs * 1.1
+    y = (h - total_h) / 2
+    for ln in lines:
+        bb = d.textbbox((0, 0), ln, font=font)
+        tw = bb[2] - bb[0]
+        x = (w - tw) / 2
+        # contorno
+        for dx in (-4, 0, 4):
+            for dy in (-4, 0, 4):
+                d.text((x + dx, y + dy), ln, font=font, fill=(0, 0, 0))
+        d.text((x, y), ln, font=font, fill=(255, 255, 255))
+        y += fs * 1.1
+    img.save(out_png, "PNG")
+    try:
+        os.remove(bg)
+    except Exception:
+        pass
+    return out_png
 
 # ------------------------------------------------------------------- FONDOS
 _THEMES = {
