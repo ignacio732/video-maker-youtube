@@ -7,7 +7,7 @@ Uso:
   python worker.py            # procesa la cola + autopiloto de canales
   python worker.py --no-auto  # solo procesa lo que ya está en cola
 """
-import os, sys, tempfile, traceback
+import os, sys, tempfile, traceback, subprocess
 import db, render
 
 MAX_VIDEOS = int(os.environ.get("MAX_VIDEOS_PER_RUN", "3"))
@@ -73,6 +73,26 @@ def process_video(v):
         size = os.path.getsize(out) / 1e6
         db.log("render", f"Render OK {size:.1f}MB", vid=vid, cid=ch["id"])
         db.update_video(vid, duration_seconds=round(dur, 1))
+
+        # Comprimir si supera el límite de Storage (50MB) y subir a Supabase
+        if os.path.getsize(out) > 45 * 1024 * 1024:
+            comp = os.path.join(td, "final_c.mp4")
+            subprocess.run(["ffmpeg", "-y", "-i", out, "-c:v", "libx264",
+                            "-crf", "30", "-preset", "veryfast",
+                            "-maxrate", "2500k", "-bufsize", "5000k",
+                            "-c:a", "aac", "-b:a", "128k", comp],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            if os.path.exists(comp) and os.path.getsize(comp) > 0:
+                out = comp
+                db.log("render", f"Comprimido a {os.path.getsize(out)/1e6:.1f}MB", vid=vid, cid=ch["id"])
+        try:
+            dest = f"{ch.get('slug','canal')}/{vid}.mp4"
+            video_url = db.upload_video(out, dest)
+            db.update_video(vid, video_url=video_url)
+            db.add_asset(vid, "final", url=video_url)
+            db.log("upload", "Video subido a Storage (visible en dashboard)", vid=vid, cid=ch["id"])
+        except Exception as e:
+            db.log("upload", f"No se pudo subir a Storage: {e}", "warn", vid, ch["id"])
 
         # 6) PUBLICAR (opcional)
         yt_tokens = db.get_setting("yt_tokens", {}) or {}
