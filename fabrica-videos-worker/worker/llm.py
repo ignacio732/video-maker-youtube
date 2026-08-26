@@ -7,7 +7,7 @@ Soporta Groq (OpenAI-compatible) y Google Gemini. Elegí con LLM_PROVIDER.
 import os, json, re, requests
 
 PROVIDER = os.environ.get("LLM_PROVIDER", "groq").lower()
-GROQ_MODEL = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
+GROQ_MODEL = os.environ.get("GROQ_MODEL", "openai/gpt-oss-120b")
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-1.5-flash")
 
 SYSTEM = (
