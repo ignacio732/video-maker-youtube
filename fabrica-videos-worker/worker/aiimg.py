@@ -19,7 +19,8 @@ from urllib.parse import quote
 BASE = "https://image.pollinations.ai/prompt/"
 MODEL = os.environ.get("AIIMG_MODEL", "flux")
 UA = {"User-Agent": "FabricaVideosYouTube/1.0"}
-MAX_WORKERS = int(os.environ.get("AIIMG_WORKERS", "4"))
+# Concurrencia baja = más confiable con el endpoint gratis (evita throttling/timeouts).
+MAX_WORKERS = int(os.environ.get("AIIMG_WORKERS", "2"))
 
 # Presets de estilo por canal (se elige con channel.visual_style; texto libre también sirve)
 STYLE_PRESETS = {
@@ -38,24 +39,33 @@ def resolve_style(style):
         return STYLE_PRESETS["realista"]
     return STYLE_PRESETS.get(str(style).strip().lower(), str(style))
 
-def _generate_one(prompt, out_path, w, h, seed, style_text, model, retries=2):
+def _try_fetch(url, params, out_path, timeout):
+    try:
+        r = requests.get(url, params=params, headers=UA, timeout=timeout)
+        if r.status_code == 200 and r.content and len(r.content) > 3000:
+            ct = r.headers.get("Content-Type", "")
+            if "image" in ct or r.content[:3] == b"\xff\xd8\xff":
+                with open(out_path, "wb") as f:
+                    f.write(r.content)
+                return True
+    except Exception:
+        pass
+    return False
+
+def _generate_one(prompt, out_path, w, h, seed, style_text, model, retries=3):
+    """Reintenta con backoff; si el modelo principal falla, prueba 'turbo' (más liviano)."""
     full = f"{prompt.strip()}, {style_text}" if style_text else prompt.strip()
     url = BASE + quote(full[:600], safe="")
-    params = {"width": w, "height": h, "nologo": "true", "model": model}
+    base_params = {"width": w, "height": h, "nologo": "true"}
     if seed is not None:
-        params["seed"] = int(seed)
-    for attempt in range(retries + 1):
-        try:
-            r = requests.get(url, params=params, headers=UA, timeout=120)
-            if r.status_code == 200 and r.content and len(r.content) > 3000:
-                ct = r.headers.get("Content-Type", "")
-                if "image" in ct or r.content[:3] == b"\xff\xd8\xff":
-                    with open(out_path, "wb") as f:
-                        f.write(r.content)
-                    return out_path
-        except Exception:
-            pass
-        time.sleep(2 * (attempt + 1))
+        base_params["seed"] = int(seed)
+    models = [model] + (["turbo"] if model != "turbo" else [])
+    for attempt in range(retries):
+        m = models[min(attempt, len(models) - 1)]  # últimos intentos usan turbo
+        params = dict(base_params, model=m)
+        if _try_fetch(url, params, out_path, timeout=150):
+            return out_path
+        time.sleep(3 * (attempt + 1))
     return None
 
 def generate_batch(prompts, outdir, w=1080, h=1920, style=None, seed=None,
