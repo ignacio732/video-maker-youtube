@@ -45,12 +45,18 @@ def _prompt(channel, vtype, seed_title, trends):
         lst = "\n".join(f"- {t}" for t in trends[:8])
         trend_block = ("TEMAS DEL MOMENTO (usá uno SOLO si encaja perfecto con el nicho; "
                        "si ninguno encaja, ignoralos y elegí el mejor tema del nicho):\n" + lst + "\n")
+    brand = (channel.get("brand_hashtag") or "").strip()
+    brand_line = (f'Hashtag de MARCA (incluilo SIEMPRE, igual en todos los videos del canal): #{brand}.\n'
+                  if brand else "")
     return f"""Canal: {channel['name']}
 Nicho: {channel['niche']}
 Tono: {channel.get('tone') or 'informativo'}
 Audiencia: {channel.get('target_audience') or 'general'}
 Formato del video: {vtype} — duración objetivo {dur}.
 
+IDENTIDAD DEL CANAL (mantené COHERENCIA con todos sus videos): mismo tono y estilo de voz
+en cada video; el CTA final invita a seguir el canal "{channel['name']}" para más de
+{channel['niche']} y encadena con el gancho (loop). {brand_line}
 {seed}{trend_block}
 Plantillas de gancho probadas (elegí/adaptá la mejor): {HOOKS}
 
@@ -60,7 +66,8 @@ el último renglón debe encadenar con el primero para generar re-visualización
 
 SEO/GEO: el título es una PREGUNTA o lleva un número, <=60 caracteres, con la palabra clave
 al principio. La descripción arranca respondiendo la pregunta en 1 frase (para IA/buscadores),
-luego 2-3 frases con contexto y datos, y termina con 2-3 hashtags relevantes.
+luego 2-3 frases con contexto y datos, y termina con 2-3 hashtags relevantes
+(uno de ellos SIEMPRE el hashtag de marca{f' #{brand}' if brand else ''}).
 
 Devolvé SOLO un JSON con esta forma EXACTA:
 {{
@@ -124,6 +131,12 @@ def generate(channel, vtype="short", seed_title=None, trends=None):
     data = _extract_json(raw)
     data.setdefault("tags", [])
     data.setdefault("hashtags", [])
+    # Coherencia: asegurar el hashtag de marca del canal en cada video
+    brand = (channel.get("brand_hashtag") or "").strip().lstrip("#")
+    if brand:
+        low = [h.lower().lstrip("#") for h in data["hashtags"]]
+        if brand.lower() not in low:
+            data["hashtags"].insert(0, brand)
     data.setdefault("thumbnail_text", (data.get("title") or "")[:24])
     data.setdefault("format", "datos_curiosos")
     # visual_subject: ancla para las búsquedas de stock. Si el LLM no lo dio, lo derivamos.
