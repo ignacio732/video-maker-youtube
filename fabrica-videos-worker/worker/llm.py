@@ -105,6 +105,36 @@ def _gemini(messages):
     r.raise_for_status()
     return r.json()["candidates"][0]["content"]["parts"][0]["text"]
 
+def keywords_for_text(texts, niche=""):
+    """
+    Genera 2-3 keywords EN INGLÉS por cada texto (frase narrada o plano de un
+    guion propio), para poder buscar video stock (Pexels/Pixabay) cuando el
+    usuario sube su propio guion sin imágenes. Devuelve una lista de listas de
+    keywords, en el mismo orden y misma cantidad que 'texts'.
+    """
+    texts = list(texts)
+    if not texts:
+        return []
+    items = "\n".join(f"{i}: {t}" for i, t in enumerate(texts))
+    prompt = (
+        f"Nicho del canal: {niche or 'general'}.\n"
+        "Para cada frase/plano numerado de abajo (puede estar en español), devolvé "
+        "2-3 palabras clave EN INGLÉS, visuales y concretas, para buscar un video "
+        "stock (Pexels) que lo ilustre.\n\n"
+        f"{items}\n\n"
+        'Devolvé SOLO un JSON con esta forma EXACTA: {"keywords": [["kw1","kw2"], ...]} '
+        "con exactamente un array de keywords por cada frase/plano, en el mismo orden."
+    )
+    messages = [{"role": "system", "content": "Respondés SIEMPRE en JSON válido, sin texto extra."},
+                {"role": "user", "content": prompt}]
+    raw = _gemini(messages) if PROVIDER == "gemini" else _groq(messages)
+    data = _extract_json(raw)
+    kws = data.get("keywords") or []
+    # Asegurar misma longitud que texts (rellenar con listas vacías si faltan)
+    if len(kws) < len(texts):
+        kws = kws + [[] for _ in range(len(texts) - len(kws))]
+    return kws[:len(texts)]
+
 def generate(channel, vtype="short", seed_title=None, trends=None):
     """Devuelve dict con title, hook, description, tags, hashtags, thumbnail_text, format, segments."""
     messages = [{"role": "system", "content": SYSTEM},
