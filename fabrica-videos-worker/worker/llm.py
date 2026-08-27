@@ -73,7 +73,9 @@ Devolvé SOLO un JSON con esta forma EXACTA:
   "format": "uno de: datos_curiosos | ranking | historia | motivacion | quiz | explicacion",
   "visual_subject": "EN INGLES: el sujeto visual central y CONCRETO del video en 1-3 palabras (ej: 'flying car', 'black hole', 'ancient egypt', 'wind turbine'). Se usa para anclar TODAS las busquedas de stock al tema.",
   "segments": [
-    {{"text": "frase narrada corta", "keywords": ["2-3 terminos EN INGLES, cosas FISICAS y FILMABLES que ilustren esta frase concreta"]}}
+    {{"text": "frase narrada corta",
+      "keywords": ["2-3 terminos EN INGLES, cosas FISICAS y FILMABLES que ilustren esta frase concreta"],
+      "image_prompt": "EN INGLES: una descripcion visual concreta de UNA escena que ilustre esta frase, para generar una imagen (ej: 'a massive black hole bending light in deep space, stars around'). Sin texto ni palabras en la imagen."}}
   ]
 }}
 {seg_hint}
@@ -130,5 +132,11 @@ def generate(channel, vtype="short", seed_title=None, trends=None):
         base = re.sub(r"[¿?¡!\"'.:]", "", base)
         base = re.sub(r"\b(sabias|sabes|conoces|por que|porque|cuantos|cuantas|como|que|cual|de|la|el|los|las|un|una|en|y|a|se|su|para|del)\b", " ", base)
         data["visual_subject"] = " ".join(base.split()[:3]).strip() or (channel.get("niche") or "")
+    # Fallback de image_prompt por segmento (por si el LLM no lo devolvió)
+    subj = data.get("visual_subject") or ""
+    for s in data.get("segments", []):
+        if not (s.get("image_prompt") or "").strip():
+            kws = ", ".join(s.get("keywords") or [])
+            s["image_prompt"] = (f"{kws}, {subj}".strip(", ") or subj or s.get("text", ""))[:300]
     data["full_text"] = " ".join(s["text"].strip() for s in data.get("segments", []))
     return data
