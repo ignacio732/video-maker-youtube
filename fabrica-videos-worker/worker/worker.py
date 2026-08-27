@@ -8,7 +8,15 @@ Uso:
   python worker.py --no-auto  # solo procesa lo que ya está en cola
 """
 import os, sys, tempfile, traceback, subprocess
-import db, render, trends
+import db, render, trends, requests, re as _re
+
+def _download(url, dest):
+    r = requests.get(url, stream=True, timeout=90)
+    r.raise_for_status()
+    with open(dest, "wb") as f:
+        for chunk in r.iter_content(1 << 16):
+            f.write(chunk)
+    return dest
 
 MAX_VIDEOS = int(os.environ.get("MAX_VIDEOS_PER_RUN", "3"))
 PRIVACY = os.environ.get("YT_PRIVACY", "public")
@@ -34,20 +42,31 @@ def process_video(v):
     db.log("start", f"Procesando {vtype} de '{ch['name']}'", vid=vid, cid=ch["id"])
 
     with tempfile.TemporaryDirectory() as td:
-        # 1) GUION (LLM) — con tendencias del momento como inspiración
+        # 1) GUION — propio (si lo subiste) o generado por IA con tendencias
         db.set_status(vid, "scripting")
         import llm
-        trend_topics = None
-        if not v.get("title"):
-            try:
-                found = trends.for_channel(ch, 8)
-                trend_topics = [t["topic"] for t in found]
-                for t in found[:5]:
-                    db.add_trend(ch["id"], t["topic"], t["source"])
-                db.log("trends", f"{len(trend_topics)} tendencias detectadas", vid=vid, cid=ch["id"])
-            except Exception as e:
-                db.log("trends", f"sin tendencias: {e}", "warn", vid, ch["id"])
-        data = llm.generate(ch, vtype, seed_title=v.get("title"), trends=trend_topics)
+        us = (v.get("user_script") or "").strip()
+        if us:
+            title = v.get("title") or us.split("\n")[0][:70]
+            sents = [s.strip() for s in _re.split(r'(?<=[.!?])\s+', us) if s.strip()]
+            data = {"title": title, "hook": sents[0] if sents else title,
+                    "description": "", "tags": [], "hashtags": [],
+                    "thumbnail_text": title[:24], "format": "propio",
+                    "segments": [{"text": s, "keywords": []} for s in sents] or [{"text": us, "keywords": []}],
+                    "full_text": us}
+            db.log("script", "Usando guion propio del usuario", vid=vid, cid=ch["id"])
+        else:
+            trend_topics = None
+            if not v.get("title"):
+                try:
+                    found = trends.for_channel(ch, 8)
+                    trend_topics = [t["topic"] for t in found]
+                    for t in found[:5]:
+                        db.add_trend(ch["id"], t["topic"], t["source"])
+                    db.log("trends", f"{len(trend_topics)} tendencias detectadas", vid=vid, cid=ch["id"])
+                except Exception as e:
+                    db.log("trends", f"sin tendencias: {e}", "warn", vid, ch["id"])
+            data = llm.generate(ch, vtype, seed_title=v.get("title"), trends=trend_topics)
         db.add_script(vid, data["full_text"], data["segments"])
         db.add_idea(ch["id"], data["title"], data.get("hook"), None, vtype, "used")
         db.update_video(vid, title=data["title"],
@@ -65,17 +84,36 @@ def process_video(v):
         w, h = (1080, 1920) if vtype == "short" else (1920, 1080)
         ass = render.build_ass(words, os.path.join(td, "subs.ass"), w=w, h=h)
 
-        # 4) VISUALES (Pexels/Pixabay) con fallback a gradiente temático
+        # 4) VISUALES: imágenes propias > clips propios del canal > stock Pexels > gradiente
         db.set_status(vid, "sourcing")
         import visuals
-        clips = visuals.fetch_clips(data["segments"], td, vtype)
-        db.log("visuals", f"{len(clips)} clips de stock", vid=vid, cid=ch["id"])
+        imgs = []
+        for i, url in enumerate(v.get("image_urls") or []):
+            try:
+                ext = os.path.splitext(url.split("?")[0])[1] or ".jpg"
+                imgs.append(_download(url, os.path.join(td, f"img_{i}{ext}")))
+            except Exception:
+                pass
+        clips = [] if (imgs or us) else visuals.fetch_clips(data["segments"], td, vtype)
+        db.log("visuals", f"{len(imgs)} imágenes propias, {len(clips)} clips stock", vid=vid, cid=ch["id"])
+
+        # Música: propia del video > default global > MUSIC_PATH
+        music = None
+        murl = v.get("music_url") or (db.get_setting("music_default", {}) or {}).get("url")
+        if murl:
+            try:
+                music = _download(murl, os.path.join(td, "music.mp3"))
+            except Exception:
+                music = None
+        if not music:
+            music = os.environ.get("MUSIC_PATH")
 
         # 5) RENDER
         db.set_status(vid, "rendering")
         out = os.path.join(td, "final.mp4")
-        music = os.environ.get("MUSIC_PATH")
-        if len(clips) >= 2:
+        if imgs:
+            render.compose_from_images(imgs, mp3, ass, out, w=w, h=h, music=music)
+        elif len(clips) >= 2:
             render.compose_from_clips(clips, mp3, ass, out, w=w, h=h, music=music)
         else:
             render.compose_from_gradient(pick_theme(ch), mp3, ass, out,
