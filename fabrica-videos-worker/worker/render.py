@@ -334,7 +334,7 @@ def compose_timeline(visuals, durations, audio_mp3, ass_path, out_mp4,
                     f"[{idx}:v]scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h},"
                     f"zoompan=z='min(zoom+0.0012,1.15)':d={frames}:"
                     f"x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s={w}x{h}:fps=30,"
-                    f"setsar=1,setpts=PTS-STARTPTS[v{idx}]")
+                    f"trim=0:{dur:.2f},setsar=1,setpts=PTS-STARTPTS[v{idx}]")
         concat = "".join(f"[v{i}]" for i in range(n)) + f"concat=n={n}:v=1:a=0[vc]"
         ass = ass_path.replace(":", "\\:")
         fc = ";".join(filters) + ";" + concat + f";[vc]ass={ass}[vout]"
@@ -364,7 +364,7 @@ def compose_from_images(images, audio_mp3, ass_path, out_mp4, w=1080, h=1920, mu
             f"[{idx}:v]scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h},"
             f"zoompan=z='min(zoom+0.0012,1.15)':d={int(per*30)}:"
             f"x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s={w}x{h}:fps=30,"
-            f"setsar=1,setpts=PTS-STARTPTS[v{idx}]")
+            f"trim=0:{per:.2f},setsar=1,setpts=PTS-STARTPTS[v{idx}]")
     concat = "".join(f"[v{i}]" for i in range(n)) + f"concat=n={n}:v=1:a=0[vc]"
     ass = ass_path.replace(":", "\\:")
     fc = ";".join(filters) + ";" + concat + f";[vc]ass={ass}[vout]"
