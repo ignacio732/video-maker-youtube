@@ -212,6 +212,8 @@ def process_video(v):
             if os.path.exists(comp) and os.path.getsize(comp) > 0:
                 out = comp
                 db.log("render", f"Comprimido a {os.path.getsize(out)/1e6:.1f}MB", vid=vid, cid=ch["id"])
+        video_url = None
+        thumb_url = None
         try:
             dest = f"{ch.get('slug','canal')}/{vid}.mp4"
             video_url = db.upload_video(out, dest)
@@ -244,27 +246,49 @@ def process_video(v):
         except Exception as e:
             db.log("thumb", f"No se pudo generar miniatura: {e}", "warn", vid, ch["id"])
 
-        # 6) PUBLICAR (opcional)
-        yt_tokens = db.get_setting("yt_tokens", {}) or {}
-        token = yt_tokens.get(ch.get("slug"))
-        if token and os.environ.get("YT_CLIENT_ID"):
-            db.set_status(vid, "publishing")
-            try:
-                import youtube_upload
-                yid, url = youtube_upload.upload(out, data["title"],
-                    data.get("description"), data.get("tags"), token, privacy=PRIVACY)
-                db.update_video(vid, status="published", youtube_video_id=yid,
-                                youtube_url=url, published_at="now()")
-                db.add_asset(vid, "final", url=url)
-                db.log("publish", f"Publicado: {url}", vid=vid, cid=ch["id"])
-            except Exception as e:
-                db.set_status(vid, "ready", f"upload falló: {e}")
-                db.log("publish", f"Upload falló, queda 'ready': {e}", "warn", vid, ch["id"])
-        else:
-            # Sin credenciales de YouTube -> queda listo para subir manual
-            db.set_status(vid, "ready")
-            db.log("ready", "Video listo (sin credenciales YouTube configuradas)",
-                   "info", vid, ch["id"])
+        # 6) PUBLICAR — vía Blotato, SOLO al accountId exacto asignado al canal.
+        #    Sin cuenta asignada NO se publica (nunca cae a otra cuenta) → evita el
+        #    problema de subir al canal equivocado.
+        db.set_status(vid, "ready")
+        publish_video(vid, ch, data, video_url, thumb_url)
+
+def publish_video(vid, ch, data, video_url, thumb_url, manual=False):
+    """Publica en YouTube vía Blotato si el canal está configurado. Devuelve True si publicó."""
+    target = (ch.get("publish_target") or "none").lower()
+    if target != "blotato":
+        return False
+    if not manual and not ch.get("publish_enabled"):
+        return False  # auto-publicación desactivada en el canal
+    acc = (ch.get("blotato_account_id") or "").strip()
+    if not acc:
+        db.log("publish", "Canal sin cuenta de Blotato asignada → no se publica (queda listo)",
+               "warn", vid, ch["id"])
+        return False
+    if not video_url:
+        db.log("publish", "Sin video_url en Storage → no se puede publicar", "warn", vid, ch["id"])
+        return False
+    api_key = (db.get_secret("blotato_api_key") or {}).get("key")
+    if not api_key:
+        db.log("publish", "Falta la API key de Blotato en secrets", "warn", vid, ch["id"])
+        return False
+    db.set_status(vid, "publishing")
+    try:
+        import blotato
+        resp = blotato.publish_youtube(
+            api_key, acc, video_url,
+            title=data.get("title"), description=data.get("description"),
+            privacy=(ch.get("yt_privacy") or "public"),
+            thumbnail_url=thumb_url, ai_generated=True)
+        url, pid = blotato.extract_url(resp)
+        db.update_video(vid, status="published", youtube_url=url,
+                        youtube_video_id=(str(pid) if pid else None), published_at="now()")
+        db.log("publish", f"Publicado en YouTube (cuenta {acc}) vía Blotato"
+                          + (f": {url}" if url else " ✓"), vid=vid, cid=ch["id"])
+        return True
+    except Exception as e:
+        db.set_status(vid, "ready", f"publicación falló: {e}")
+        db.log("publish", f"Publicación falló, queda 'ready': {e}", "warn", vid, ch["id"])
+        return False
 
 def autopilot():
     """Encola un video por cada canal activo que no tenga trabajo en curso."""
