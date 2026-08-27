@@ -250,18 +250,29 @@ def process_video(v):
         #    Sin cuenta asignada NO se publica (nunca cae a otra cuenta) → evita el
         #    problema de subir al canal equivocado.
         db.set_status(vid, "ready")
-        publish_video(vid, ch, data, video_url, thumb_url)
+        publish_video(vid, ch, data, video_url, thumb_url, vtype=vtype)
 
-def publish_video(vid, ch, data, video_url, thumb_url, manual=False):
-    """Publica en YouTube vía Blotato si el canal está configurado. Devuelve True si publicó."""
-    target = (ch.get("publish_target") or "none").lower()
-    if target != "blotato":
-        return False
+def _channel_accounts(ch):
+    """Lista de cuentas destino del canal: [{platform, accountId}]. Compat con el campo viejo."""
+    accts = ch.get("publish_accounts") or []
+    if not accts and ch.get("blotato_account_id"):
+        accts = [{"platform": "youtube", "accountId": ch["blotato_account_id"]}]
+    # normalizar y descartar entradas incompletas
+    out = []
+    for a in accts:
+        p = (a.get("platform") or "").lower()
+        i = str(a.get("accountId") or "").strip()
+        if p and i:
+            out.append({"platform": p, "accountId": i})
+    return out
+
+def publish_video(vid, ch, data, video_url, thumb_url, manual=False, vtype="short"):
+    """Publica en TODAS las cuentas asignadas al canal (YouTube/TikTok/IG/FB) vía Blotato."""
     if not manual and not ch.get("publish_enabled"):
         return False  # auto-publicación desactivada en el canal
-    acc = (ch.get("blotato_account_id") or "").strip()
-    if not acc:
-        db.log("publish", "Canal sin cuenta de Blotato asignada → no se publica (queda listo)",
+    accts = _channel_accounts(ch)
+    if not accts:
+        db.log("publish", "Canal sin cuentas asignadas → no se publica (queda listo)",
                "warn", vid, ch["id"])
         return False
     if not video_url:
@@ -271,24 +282,35 @@ def publish_video(vid, ch, data, video_url, thumb_url, manual=False):
     if not api_key:
         db.log("publish", "Falta la API key de Blotato en secrets", "warn", vid, ch["id"])
         return False
+
+    import blotato
+    privacy = ch.get("yt_privacy") or "public"
     db.set_status(vid, "publishing")
-    try:
-        import blotato
-        resp = blotato.publish_youtube(
-            api_key, acc, video_url,
-            title=data.get("title"), description=data.get("description"),
-            privacy=(ch.get("yt_privacy") or "public"),
-            thumbnail_url=thumb_url, ai_generated=True)
-        url, pid = blotato.extract_url(resp)
-        db.update_video(vid, status="published", youtube_url=url,
-                        youtube_video_id=(str(pid) if pid else None), published_at="now()")
-        db.log("publish", f"Publicado en YouTube (cuenta {acc}) vía Blotato"
-                          + (f": {url}" if url else " ✓"), vid=vid, cid=ch["id"])
+    ok_any, yt_url = False, None
+    for a in accts:
+        plat, acc = a["platform"], a["accountId"]
+        # Un video horizontal (long) no va a plataformas verticales (reels/shorts)
+        if vtype == "long" and plat in blotato.VERTICAL_PLATFORMS:
+            db.log("publish", f"{plat}: se omite (video horizontal, esa plataforma es vertical)",
+                   "info", vid, ch["id"])
+            continue
+        try:
+            resp = blotato.publish(api_key, plat, acc, video_url,
+                                   title=data.get("title"), description=data.get("description"),
+                                   privacy=privacy, thumbnail_url=thumb_url, ai_generated=True)
+            url, _ = blotato.extract_url(resp)
+            if plat == "youtube":
+                yt_url = url
+            ok_any = True
+            db.log("publish", f"Publicado en {plat} (cuenta {acc})" + (f": {url}" if url else " ✓"),
+                   vid=vid, cid=ch["id"])
+        except Exception as e:
+            db.log("publish", f"{plat} (cuenta {acc}) falló: {e}", "warn", vid, ch["id"])
+    if ok_any:
+        db.update_video(vid, status="published", youtube_url=yt_url, published_at="now()")
         return True
-    except Exception as e:
-        db.set_status(vid, "ready", f"publicación falló: {e}")
-        db.log("publish", f"Publicación falló, queda 'ready': {e}", "warn", vid, ch["id"])
-        return False
+    db.set_status(vid, "ready", "publicación falló en todas las cuentas")
+    return False
 
 def autopilot():
     """Encola un video por cada canal activo que no tenga trabajo en curso."""
