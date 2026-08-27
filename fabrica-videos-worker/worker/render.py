@@ -256,6 +256,70 @@ def compose_from_clips(clips, audio_mp3, ass_path, out_mp4, w=1080, h=1920, musi
         _run(cmd)
     return out_mp4
 
+def compose_timeline(visuals, durations, audio_mp3, ass_path, out_mp4,
+                     w=1080, h=1920, theme="generic", music=None):
+    """
+    Render SINCRONIZADO: una lista de visuales (1 por segmento) donde cada uno dura
+    exactamente el tiempo que se narra su frase. Mezcla tipos:
+      - 'video'    : clip de stock (looped) recortado a su duración
+      - 'image'    : foto de stock con Ken Burns
+      - 'gradient' : tarjeta temática con Ken Burns (cuando no hubo match relevante)
+    Así lo que se ve coincide con lo que se dice → mucha más credibilidad.
+    """
+    voice = audio_duration(audio_mp3)
+    n = len(visuals)
+    if n == 0:
+        return compose_from_gradient(theme, audio_mp3, ass_path, out_mp4, w=w, h=h, music=music)
+    # Normaliza duraciones para que sumen la voz (+ pequeña cola en el último)
+    durs = [max(0.6, float(d)) for d in durations[:n]]
+    while len(durs) < n:
+        durs.append(2.0)
+    scale = voice / sum(durs) if sum(durs) > 0 else 1.0
+    durs = [d * scale for d in durs]
+    durs[-1] += 0.5  # cola para que no corte antes del final del audio
+    total = sum(durs)
+
+    with tempfile.TemporaryDirectory() as td:
+        inputs, filters = [], []
+        for idx, vis in enumerate(visuals):
+            dur = durs[idx]
+            frames = max(1, int(dur * 30))
+            vtype = vis.get("type")
+            path = vis.get("path")
+            if vtype == "video" and path and os.path.exists(path):
+                inputs += ["-stream_loop", "-1", "-i", path]
+                filters.append(
+                    f"[{idx}:v]scale={w}:{h}:force_original_aspect_ratio=increase,"
+                    f"crop={w}:{h},trim=0:{dur:.2f},setpts=PTS-STARTPTS,fps=30,setsar=1[v{idx}]")
+            else:
+                # imagen o gradiente → foto/tarjeta con Ken Burns
+                if vtype == "image" and path and os.path.exists(path):
+                    src = path
+                else:
+                    src = make_gradient_bg(theme, os.path.join(td, f"grad_{idx}.png"), w, h)
+                inputs += ["-loop", "1", "-t", f"{dur:.2f}", "-i", src]
+                filters.append(
+                    f"[{idx}:v]scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h},"
+                    f"zoompan=z='min(zoom+0.0012,1.15)':d={frames}:"
+                    f"x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s={w}x{h}:fps=30,"
+                    f"setsar=1,setpts=PTS-STARTPTS[v{idx}]")
+        concat = "".join(f"[v{i}]" for i in range(n)) + f"concat=n={n}:v=1:a=0[vc]"
+        ass = ass_path.replace(":", "\\:")
+        fc = ";".join(filters) + ";" + concat + f";[vc]ass={ass}[vout]"
+        cmd = ["ffmpeg", "-y"] + inputs + ["-i", audio_mp3]
+        ai = n
+        if music and os.path.exists(music):
+            cmd += ["-stream_loop", "-1", "-i", music]
+            fc += f";[{ai}:a]volume=1.0[vv];[{ai+1}:a]volume=0.12[mm];[vv][mm]amix=inputs=2:duration=first[aout]"
+            amap = "[aout]"
+        else:
+            amap = f"{ai}:a"
+        cmd += ["-filter_complex", fc, "-map", "[vout]", "-map", amap,
+                "-t", f"{total:.2f}", "-c:v", "libx264", "-preset", "medium", "-crf", "23",
+                "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k", "-r", "30", out_mp4]
+        _run(cmd)
+    return out_mp4
+
 def compose_from_images(images, audio_mp3, ass_path, out_mp4, w=1080, h=1920, music=None):
     """Render con IMÁGENES propias del usuario: Ken Burns (zoom/paneo) secuenciado + voz + subs."""
     dur = audio_duration(audio_mp3) + 0.4
