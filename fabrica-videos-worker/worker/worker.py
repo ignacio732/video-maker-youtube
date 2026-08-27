@@ -79,8 +79,9 @@ def process_video(v):
                     found = trends.for_channel(ch, 8)
                     trend_topics = [t["topic"] for t in found]
                     for t in found[:5]:
-                        db.add_trend(ch["id"], t["topic"], t["source"])
-                    db.log("trends", f"{len(trend_topics)} tendencias detectadas", vid=vid, cid=ch["id"])
+                        db.add_trend(ch["id"], t["topic"], t["source"], t.get("category"))
+                    cats = ", ".join(sorted(set(t.get("category") or "" for t in found[:5])))
+                    db.log("trends", f"{len(trend_topics)} tendencias ({cats})", vid=vid, cid=ch["id"])
                 except Exception as e:
                     db.log("trends", f"sin tendencias: {e}", "warn", vid, ch["id"])
             data = llm.generate(ch, vtype, seed_title=v.get("title"), trends=trend_topics)
@@ -322,12 +323,26 @@ def autopilot():
         db.enqueue_video(ch["id"], vtype)
         db.log("autopilot", f"Encolado {vtype} para '{ch['name']}'", cid=ch["id"])
 
+def refresh_global_trends():
+    """Refresca las tendencias globales por rubro (para la vista del dashboard)."""
+    try:
+        found = trends.discover_global(per_cat=3)
+        if not found:
+            return
+        db.clear_global_trends()
+        for t in found[:60]:
+            db.add_trend(None, t["topic"], t["source"], t.get("category"))
+        db.log("trends", f"{len(found[:60])} tendencias globales refrescadas por rubro")
+    except Exception as e:
+        db.log("trends", f"refresh global falló: {e}", "warn")
+
 def main():
     if "--no-auto" not in sys.argv:
         try:
             autopilot()
         except Exception as e:
             db.log("autopilot", f"Error: {e}", "error")
+        refresh_global_trends()
 
     pend = db.get_pending_videos(MAX_VIDEOS)
     db.log("run", f"{len(pend)} videos en cola para procesar")
