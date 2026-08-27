@@ -27,40 +27,65 @@ def list_accounts(api_key):
         return [data]
     return data if isinstance(data, list) else []
 
-def publish_youtube(api_key, account_id, video_url, title, description,
-                    privacy="public", thumbnail_url=None, made_for_kids=False,
-                    notify_subscribers=True, ai_generated=True):
+# Plataformas verticales (reel/short). Un video horizontal (long) no va acá.
+VERTICAL_PLATFORMS = ("tiktok", "instagram", "facebook")
+
+def _target(platform, title, privacy, thumbnail_url, ai=True, page_id=None):
+    """Arma el objeto 'target' según los campos que pide cada plataforma."""
+    if platform == "youtube":
+        t = {
+            "targetType": "youtube",
+            "title": (title or "")[:100],
+            "privacyStatus": privacy if privacy in ("public", "unlisted", "private") else "public",
+            "shouldNotifySubscribers": True,
+            "isMadeForKids": False,
+            "containsSyntheticMedia": bool(ai),  # declarar contenido IA (buena práctica)
+        }
+        if thumbnail_url:
+            t["thumbnailUrl"] = thumbnail_url
+        return t
+    if platform == "tiktok":
+        return {
+            "targetType": "tiktok",
+            "privacyLevel": "PUBLIC_TO_EVERYONE" if privacy == "public" else "SELF_ONLY",
+            "disabledComments": False, "disabledDuet": False, "disabledStitch": False,
+            "isBrandedContent": False, "isYourBrand": False, "isAiGenerated": bool(ai),
+        }
+    if platform == "instagram":
+        return {"targetType": "instagram", "mediaType": "reel"}
+    if platform == "facebook":
+        return {"targetType": "facebook", "pageId": str(page_id or ""), "mediaType": "reel"}
+    return {"targetType": platform}
+
+def publish(api_key, platform, account_id, video_url, title, description,
+            privacy="public", thumbnail_url=None, ai_generated=True):
     """
-    Publica un video en YouTube a través de Blotato.
-    Devuelve el JSON de respuesta (que suele incluir id/url del post).
-    Lanza excepción si falla (para que el worker lo deje 'ready' y reintente).
+    Publica un video en una plataforma (youtube/tiktok/instagram/facebook) vía Blotato.
+    Devuelve el JSON de respuesta. Lanza excepción si falla.
     """
-    target = {
-        "targetType": "youtube",
-        "title": (title or "")[:100],
-        "privacyStatus": privacy if privacy in ("public", "unlisted", "private") else "public",
-        "shouldNotifySubscribers": bool(notify_subscribers),
-        "isMadeForKids": bool(made_for_kids),
-        "containsSyntheticMedia": bool(ai_generated),  # buena práctica: declarar contenido IA
-    }
-    if thumbnail_url:
-        target["thumbnailUrl"] = thumbnail_url
+    target = _target(platform, title, privacy, thumbnail_url, ai_generated, page_id=account_id)
     body = {"post": {
         "accountId": str(account_id),
         "content": {
             "text": description or title or "",
             "mediaUrls": [video_url],
-            "platform": "youtube",
+            "platform": platform,
         },
         "target": target,
     }}
     r = requests.post(f"{BASE}/posts", headers=_headers(api_key), json=body, timeout=120)
     if r.status_code >= 400:
-        raise RuntimeError(f"Blotato {r.status_code}: {r.text[:500]}")
+        raise RuntimeError(f"Blotato {platform} {r.status_code}: {r.text[:400]}")
     try:
         return r.json()
     except Exception:
         return {"raw": r.text}
+
+def publish_youtube(api_key, account_id, video_url, title, description,
+                    privacy="public", thumbnail_url=None, ai_generated=True, **_):
+    """Compat: publica en YouTube (usa publish())."""
+    return publish(api_key, "youtube", account_id, video_url, title, description,
+                   privacy, thumbnail_url, ai_generated)
 
 def extract_url(resp):
     """Intenta extraer una URL/id publicada de la respuesta de Blotato."""
