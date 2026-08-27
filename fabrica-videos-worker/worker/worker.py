@@ -101,19 +101,49 @@ def process_video(v):
         tot_w = sum(weights) or 1
         seg_durations = [dur * (wgt / tot_w) for wgt in weights]
 
-        # Selección de stock relevante por segmento (salvo que el usuario haya subido imágenes)
+        # Modo visual del canal: 'hybrid' (stock + IA rellena huecos), 'ai' (todo IA),
+        # 'stock' (solo stock). Por defecto híbrido → cobertura visual del 100%.
+        subject = data.get("visual_subject") or ch.get("niche") or ""
+        mode = (ch.get("visual_mode") or "hybrid").lower()
+
         visual_list = []
         if not imgs:
-            subject = data.get("visual_subject") or ch.get("niche") or ""
-            try:
-                visual_list = visuals.fetch_visuals(segs, seg_durations, subject, td, vtype, w, h)
-            except Exception as e:
-                db.log("visuals", f"stock falló: {e}", "warn", vid, ch["id"])
+            # 1) Stock relevante (salvo modo IA puro)
+            if mode in ("stock", "hybrid"):
+                try:
+                    visual_list = visuals.fetch_visuals(segs, seg_durations, subject, td, vtype, w, h)
+                except Exception as e:
+                    db.log("visuals", f"stock falló: {e}", "warn", vid, ch["id"])
+            if not visual_list:
+                visual_list = [{"type": "gradient"} for _ in segs]
+
+            # 2) Imágenes IA (gratis, sin API key): en 'ai' generan todo;
+            #    en 'hybrid' rellenan los segmentos que quedaron sin stock (gradiente).
+            if mode in ("ai", "hybrid"):
+                need = (list(range(len(segs))) if mode == "ai"
+                        else [i for i, x in enumerate(visual_list) if x.get("type") == "gradient"])
+                if need:
+                    try:
+                        import aiimg
+                        prompts = [(segs[i].get("image_prompt") or subject) for i in need]
+                        gen = aiimg.generate_batch(prompts, td, w=w, h=h,
+                                                   style=ch.get("visual_style"),
+                                                   seed=ch.get("ai_seed"), idx_offset=1000)
+                        ok = 0
+                        for k, i in enumerate(need):
+                            if gen[k]:
+                                visual_list[i] = {"type": "image", "path": gen[k]}; ok += 1
+                        db.log("ai", f"{ok}/{len(need)} imágenes IA generadas "
+                                     f"(modo {mode}, estilo {ch.get('visual_style')})",
+                               vid=vid, cid=ch["id"])
+                    except Exception as e:
+                        db.log("ai", f"IA de imágenes falló: {e}", "warn", vid, ch["id"])
+
         n_vid = sum(1 for x in visual_list if x.get("type") == "video")
         n_img = sum(1 for x in visual_list if x.get("type") == "image")
         n_grad = sum(1 for x in visual_list if x.get("type") == "gradient")
         db.log("visuals",
-               f"{len(imgs)} imágenes propias | stock relevante: {n_vid} vídeos, {n_img} fotos, {n_grad} gradiente",
+               f"{len(imgs)} propias | {n_vid} vídeos stock, {n_img} imágenes, {n_grad} gradiente (modo {mode})",
                vid=vid, cid=ch["id"])
 
         # Música: propia del video > default global > MUSIC_PATH
