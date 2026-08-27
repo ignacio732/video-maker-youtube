@@ -21,47 +21,6 @@ def _download(url, dest):
 MAX_VIDEOS = int(os.environ.get("MAX_VIDEOS_PER_RUN", "3"))
 PRIVACY = os.environ.get("YT_PRIVACY", "public")
 
-# Etiquetas reconocidas en un guion propio "con formato" (hook / guion de voz /
-# plano y edición / prompt visual completo / cta / control factual). Si el
-# usuario pega un guion con estas secciones, sólo se narra lo que corresponde
-# narrar (hook + guion de voz + cta) y el resto se usa como notas de dirección
-# para buscar visuales, en vez de leerse en voz alta.
-_SECTION_PATTERNS = [
-    ("hook", r"hook\b[^:\n]*"),
-    ("guion_voz", r"gui[oó]n\s+de\s+voz"),
-    ("plano_edicion", r"plano\s+y\s+edici[oó]n"),
-    ("prompt_visual", r"prompt\s+visual[^:\n]*"),
-    ("cta", r"cta\b"),
-    ("control_factual", r"control\s+factual[^:\n]*"),
-]
-_SECTION_RE = _re.compile(
-    r"(?im)^\s*(" + "|".join(p for _, p in _SECTION_PATTERNS) + r")\s*:\s*"
-)
-
-def parse_user_script(us):
-    """
-    Si el guion propio sigue el formato con etiquetas, separa:
-      - narracion: lo que realmente hay que narrar (hook + guion de voz + cta)
-      - shot_list: la lista de planos ("plano y edición") para buscar visuales
-    Si no hay etiquetas reconocidas, devuelve (us, None) y se narra todo tal cual
-    (comportamiento anterior, para guiones simples sin este formato).
-    """
-    matches = list(_SECTION_RE.finditer(us))
-    if not matches:
-        return us.strip(), None
-    sections = {}
-    for i, m in enumerate(matches):
-        label = m.group(1).strip().lower()
-        key = next((k for k, p in _SECTION_PATTERNS if _re.match(p, label, _re.I)), None)
-        start, end = m.end(), (matches[i + 1].start() if i + 1 < len(matches) else len(us))
-        content = us[start:end].strip()
-        if key and content:
-            sections[key] = (sections.get(key, "") + " " + content).strip()
-    narracion = " ".join(sections[k] for k in ("hook", "guion_voz", "cta") if sections.get(k)).strip()
-    if not narracion:
-        narracion = us.strip()
-    return narracion, sections.get("plano_edicion")
-
 THEME_MAP = [
     (("espacio","universo","astronomia","cosmos","planeta"), "space"),
     (("historia","civilizacion","antiguo","imperio"),        "history"),
@@ -86,20 +45,16 @@ def process_video(v):
         # 1) GUION — propio (si lo subiste) o generado por IA con tendencias
         db.set_status(vid, "scripting")
         import llm
-        us_raw = (v.get("user_script") or "").strip()
-        shot_list = None
-        if us_raw:
-            narracion, shot_list = parse_user_script(us_raw)
-            title = v.get("title") or narracion.split("\n")[0][:70]
-            sents = [s.strip() for s in _re.split(r'(?<=[.!?])\s+', narracion) if s.strip()]
+        us = (v.get("user_script") or "").strip()
+        if us:
+            title = v.get("title") or us.split("\n")[0][:70]
+            sents = [s.strip() for s in _re.split(r'(?<=[.!?])\s+', us) if s.strip()]
             data = {"title": title, "hook": sents[0] if sents else title,
                     "description": "", "tags": [], "hashtags": [],
                     "thumbnail_text": title[:24], "format": "propio",
-                    "segments": [{"text": s, "keywords": []} for s in sents] or [{"text": narracion, "keywords": []}],
-                    "full_text": narracion}
-            db.log("script", "Usando guion propio del usuario"
-                   + (" (con plano y edición separado)" if shot_list else ""),
-                   vid=vid, cid=ch["id"])
+                    "segments": [{"text": s, "keywords": []} for s in sents] or [{"text": us, "keywords": []}],
+                    "full_text": us}
+            db.log("script", "Usando guion propio del usuario", vid=vid, cid=ch["id"])
         else:
             trend_topics = None
             if not v.get("title"):
@@ -129,7 +84,7 @@ def process_video(v):
         w, h = (1080, 1920) if vtype == "short" else (1920, 1080)
         ass = render.build_ass(words, os.path.join(td, "subs.ass"), w=w, h=h)
 
-        # 4) VISUALES: imágenes propias > clips propios del canal > stock Pexels > gradiente
+        # 4) VISUALES: imágenes propias > stock relevante por segmento (vídeo/foto) > gradiente
         db.set_status(vid, "sourcing")
         import visuals
         imgs = []
@@ -139,28 +94,27 @@ def process_video(v):
                 imgs.append(_download(url, os.path.join(td, f"img_{i}{ext}")))
             except Exception:
                 pass
-        clips = []
+
+        # Duración estimada por segmento (proporcional al texto), para alinear cada visual
+        segs = data["segments"]
+        weights = [max(1, len(s.get("text", ""))) for s in segs]
+        tot_w = sum(weights) or 1
+        seg_durations = [dur * (wgt / tot_w) for wgt in weights]
+
+        # Selección de stock relevante por segmento (salvo que el usuario haya subido imágenes)
+        visual_list = []
         if not imgs:
-            seg_source = data["segments"]
-            if us_raw:
-                # Guion propio sin imágenes: hay que conseguir keywords de búsqueda
-                # (el guion propio no trae keywords en inglés como el generado por IA).
-                try:
-                    if shot_list:
-                        # Usar la lista de planos ("plano y edición") como fuente de
-                        # visuales: es más rica que las frases narradas.
-                        shots = [s.strip() for s in _re.split(r"[;\n]+", shot_list) if s.strip()]
-                        kw_lists = llm.keywords_for_text(shots, ch.get("niche"))
-                        seg_source = [{"text": "", "keywords": kws} for kws in kw_lists]
-                    else:
-                        kw_lists = llm.keywords_for_text([s["text"] for s in data["segments"]], ch.get("niche"))
-                        for seg, kws in zip(data["segments"], kw_lists):
-                            seg["keywords"] = kws
-                except Exception as e:
-                    db.log("visuals", f"No se pudieron generar keywords para el guion propio: {e}",
-                           "warn", vid, ch["id"])
-            clips = visuals.fetch_clips(seg_source, td, vtype)
-        db.log("visuals", f"{len(imgs)} imágenes propias, {len(clips)} clips stock", vid=vid, cid=ch["id"])
+            subject = data.get("visual_subject") or ch.get("niche") or ""
+            try:
+                visual_list = visuals.fetch_visuals(segs, seg_durations, subject, td, vtype, w, h)
+            except Exception as e:
+                db.log("visuals", f"stock falló: {e}", "warn", vid, ch["id"])
+        n_vid = sum(1 for x in visual_list if x.get("type") == "video")
+        n_img = sum(1 for x in visual_list if x.get("type") == "image")
+        n_grad = sum(1 for x in visual_list if x.get("type") == "gradient")
+        db.log("visuals",
+               f"{len(imgs)} imágenes propias | stock relevante: {n_vid} vídeos, {n_img} fotos, {n_grad} gradiente",
+               vid=vid, cid=ch["id"])
 
         # Música: propia del video > default global > MUSIC_PATH
         music = None
@@ -176,12 +130,15 @@ def process_video(v):
         # 5) RENDER
         db.set_status(vid, "rendering")
         out = os.path.join(td, "final.mp4")
+        theme = pick_theme(ch)
         if imgs:
             render.compose_from_images(imgs, mp3, ass, out, w=w, h=h, music=music)
-        elif len(clips) >= 2:
-            render.compose_from_clips(clips, mp3, ass, out, w=w, h=h, music=music)
+        elif visual_list and any(x.get("type") in ("video", "image") for x in visual_list):
+            # Timeline sincronizado: cada visual relevante dura lo que su frase narrada
+            render.compose_timeline(visual_list, seg_durations, mp3, ass, out,
+                                    w=w, h=h, theme=theme, music=music)
         else:
-            render.compose_from_gradient(pick_theme(ch), mp3, ass, out,
+            render.compose_from_gradient(theme, mp3, ass, out,
                                          w=w, h=h, title=None, music=music)
         size = os.path.getsize(out) / 1e6
         db.log("render", f"Render OK {size:.1f}MB", vid=vid, cid=ch["id"])
