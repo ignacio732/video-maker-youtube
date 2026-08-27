@@ -33,6 +33,23 @@ def pick_theme(channel):
             return theme
     return "generic"
 
+def visual_config(ch):
+    """Deriva (modo_motor, estilo_IA) desde el tipo de contenido del canal.
+    Tipos amigables: video_real | anime | mix | hibrido. Migrables cuando se quiera."""
+    ct = (ch.get("content_type") or "").lower()
+    style = ch.get("visual_style") or "realista"
+    if ct == "video_real":
+        return "stock", "realista"
+    if ct == "anime":
+        # 100% IA con la estética del canal (si quedó 'realista', usar 'anime')
+        return "ai", (style if style != "realista" else "anime")
+    if ct == "mix":
+        return "hybrid", style
+    if ct == "hibrido":
+        return "hybrid", "realista"
+    # Sin content_type definido: respetar el modo/estilo existentes
+    return (ch.get("visual_mode") or "hybrid").lower(), style
+
 def process_video(v):
     vid = v["id"]
     ch = db.get_channel(v["channel_id"])
@@ -104,7 +121,7 @@ def process_video(v):
         # Modo visual del canal: 'hybrid' (stock + IA rellena huecos), 'ai' (todo IA),
         # 'stock' (solo stock). Por defecto híbrido → cobertura visual del 100%.
         subject = data.get("visual_subject") or ch.get("niche") or ""
-        mode = (ch.get("visual_mode") or "hybrid").lower()
+        mode, ai_style = visual_config(ch)
 
         visual_list = []
         if not imgs:
@@ -127,14 +144,14 @@ def process_video(v):
                         import aiimg
                         prompts = [(segs[i].get("image_prompt") or subject) for i in need]
                         gen = aiimg.generate_batch(prompts, td, w=w, h=h,
-                                                   style=ch.get("visual_style"),
+                                                   style=ai_style,
                                                    seed=ch.get("ai_seed"), idx_offset=1000)
                         ok = 0
                         for k, i in enumerate(need):
                             if gen[k]:
                                 visual_list[i] = {"type": "image", "path": gen[k]}; ok += 1
                         db.log("ai", f"{ok}/{len(need)} imágenes IA generadas "
-                                     f"(modo {mode}, estilo {ch.get('visual_style')})",
+                                     f"(modo {mode}, estilo {ai_style})",
                                vid=vid, cid=ch["id"])
                     except Exception as e:
                         db.log("ai", f"IA de imágenes falló: {e}", "warn", vid, ch["id"])
@@ -201,10 +218,23 @@ def process_video(v):
         except Exception as e:
             db.log("upload", f"No se pudo subir a Storage: {e}", "warn", vid, ch["id"])
 
-        # 5b) MINIATURA (thumbnail viral)
+        # 5b) MINIATURA (portada) coherente con la identidad del canal
         try:
             thumb = os.path.join(td, "thumb.png")
-            render.make_thumbnail(data.get("thumbnail_text") or data["title"], pick_theme(ch), thumb)
+            # Fondo: una imagen del propio video (misma estética) o un frame del render
+            bg_img = next((x.get("path") for x in visual_list
+                           if x.get("type") == "image" and x.get("path")), None)
+            if not bg_img:
+                frame = os.path.join(td, "thumbframe.jpg")
+                try:
+                    subprocess.run(["ffmpeg", "-y", "-ss", "1.5", "-i", out,
+                                    "-frames:v", "1", frame],
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    bg_img = frame if (os.path.exists(frame) and os.path.getsize(frame) > 0) else None
+                except Exception:
+                    bg_img = None
+            render.make_thumbnail(data.get("thumbnail_text") or data["title"], theme, thumb,
+                                  accent=ch.get("accent_color"), bg_image=bg_img)
             thumb_url = db.upload_media(thumb, f"{ch.get('slug','canal')}/{vid}.png", "image/png")
             db.update_video(vid, thumbnail_url=thumb_url)
             db.add_asset(vid, "thumbnail", url=thumb_url)
