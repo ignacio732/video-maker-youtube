@@ -93,6 +93,13 @@ def generate_batch(prompts, outdir, w=1080, h=1920, style=None, seed=None,
                 results[i] = path
             except Exception:
                 pass
+    # 2ª pasada SECUENCIAL para los que fallaron (más gentil con el endpoint gratis → sube el %)
+    missing = [i for i, r in enumerate(results) if not r]
+    for i in missing:
+        s = (int(seed) + i) if seed is not None else None
+        out = os.path.join(outdir, f"ai_{idx_offset + i}.jpg")
+        results[i] = _generate_one(prompts[i], out, w, h, s, style_text, model)
+        time.sleep(1)
     return results
 
 def generate_one(prompt, out_path, w=1080, h=1920, style=None, seed=None, model=None):
