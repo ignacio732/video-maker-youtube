@@ -139,6 +139,13 @@ def process_video(v):
                     except Exception as e:
                         db.log("ai", f"IA de imágenes falló: {e}", "warn", vid, ch["id"])
 
+            # Respaldo: si en modo IA quedaron huecos (imagen que no salió), completar con stock
+            if mode == "ai" and any(x.get("type") == "gradient" for x in visual_list):
+                try:
+                    visuals.fill_gaps(visual_list, segs, seg_durations, subject, td, vtype, w, h)
+                except Exception as e:
+                    db.log("visuals", f"stock de respaldo falló: {e}", "warn", vid, ch["id"])
+
         n_vid = sum(1 for x in visual_list if x.get("type") == "video")
         n_img = sum(1 for x in visual_list if x.get("type") == "image")
         n_grad = sum(1 for x in visual_list if x.get("type") == "gradient")
