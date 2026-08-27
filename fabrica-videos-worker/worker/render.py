@@ -116,14 +116,46 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         f.write(header + "\n".join(body) + "\n")
     return out_ass
 
-def make_thumbnail(text, theme, out_png, w=1280, h=720):
-    """Miniatura 1280x720: fondo con gradiente temático de alto contraste + texto grande."""
-    from PIL import ImageDraw, ImageFont
-    bg = make_gradient_bg(theme, out_png + ".bg.png", w, h)
-    img = Image.open(bg).convert("RGB")
+def _hex_rgb(s, default=(255, 61, 87)):
+    try:
+        s = (s or "").lstrip("#")
+        return (int(s[0:2], 16), int(s[2:4], 16), int(s[4:6], 16))
+    except Exception:
+        return default
+
+def make_thumbnail(text, theme, out_png, w=1280, h=720, accent=None, bg_image=None):
+    """
+    Miniatura 1280x720 COHERENTE con el canal: fondo con una imagen del propio video
+    (misma estética) o gradiente temático, + barra y palabra clave en el color de acento
+    del canal + texto grande con contorno.
+    """
+    from PIL import ImageDraw, ImageFont, ImageFilter
+    acc = _hex_rgb(accent)
+    if bg_image and os.path.exists(bg_image):
+        # Usar una imagen del video como fondo (recorte 16:9 + oscurecido para legibilidad)
+        try:
+            im = Image.open(bg_image).convert("RGB")
+            sw, sh = im.size
+            scale = max(w / sw, h / sh)
+            im = im.resize((int(sw * scale), int(sh * scale)))
+            left = (im.size[0] - w) // 2; top = (im.size[1] - h) // 2
+            im = im.crop((left, top, left + w, top + h))
+            # scrim oscuro (degradado desde abajo) para que el texto resalte
+            dark = Image.new("RGB", (w, h), (0, 0, 0))
+            mask = Image.new("L", (w, h), 0)
+            md = ImageDraw.Draw(mask)
+            for y in range(h):
+                md.line([(0, y), (w, y)], fill=int(60 + 150 * (y / h)))
+            img = Image.composite(dark, im, mask)
+            bg = None
+        except Exception:
+            img = Image.open(make_gradient_bg(theme, out_png + ".bg.png", w, h)).convert("RGB"); bg = out_png + ".bg.png"
+    else:
+        bg = make_gradient_bg(theme, out_png + ".bg.png", w, h)
+        img = Image.open(bg).convert("RGB")
     d = ImageDraw.Draw(img)
-    # barra de acento
-    d.rectangle([0, 0, int(w * 0.02), h], fill=(255, 61, 87))
+    # barra de acento (color del canal)
+    d.rectangle([0, 0, int(w * 0.02), h], fill=acc)
     words = (text or "").upper().split()
     # armar 2-3 líneas
     lines, cur = [], ""
