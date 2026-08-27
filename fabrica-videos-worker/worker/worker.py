@@ -156,8 +156,11 @@ def process_video(v):
                     except Exception as e:
                         db.log("ai", f"IA de imágenes falló: {e}", "warn", vid, ch["id"])
 
-            # Respaldo: si en modo IA quedaron huecos (imagen que no salió), completar con stock
-            if mode == "ai" and any(x.get("type") == "gradient" for x in visual_list):
+            # Respaldo en modo IA: SOLO si el estilo es fotorrealista se completa con video real.
+            # En estilos estilizados (anime, cómic, 3d...) meter footage real rompería la estética,
+            # así que se deja gradiente temático (más coherente con el look del canal).
+            if mode == "ai" and ai_style in ("realista", "documental") \
+               and any(x.get("type") == "gradient" for x in visual_list):
                 try:
                     visuals.fill_gaps(visual_list, segs, seg_durations, subject, td, vtype, w, h)
                 except Exception as e:
