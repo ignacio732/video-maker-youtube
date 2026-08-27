@@ -74,10 +74,18 @@ def add_asset(vid, kind, url=None, storage_path=None, meta=None):
     return _post("assets", {"video_id": vid, "kind": kind, "url": url,
                             "storage_path": storage_path, "meta": meta or {}})[0]
 
-# ---- Settings / Logs ----
+# ---- Settings / Secrets / Logs ----
 def get_setting(key, default=None):
     rows = _get("settings", {"key": f"eq.{key}", "select": "value"})
     return rows[0]["value"] if rows else default
+
+def get_secret(key, default=None):
+    """Lee un secreto de la tabla protegida ytfactory.secrets (solo service_role)."""
+    try:
+        rows = _get("secrets", {"key": f"eq.{key}", "select": "value"})
+        return rows[0]["value"] if rows else default
+    except Exception:
+        return default
 
 def upload_media(local_path, dest_name, content_type="video/mp4"):
     """Sube un archivo al bucket público 'videos' y devuelve la URL pública."""
