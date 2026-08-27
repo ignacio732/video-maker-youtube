@@ -71,12 +71,21 @@ Devolvé SOLO un JSON con esta forma EXACTA:
   "hashtags": ["3 hashtags sin #"],
   "thumbnail_text": "2 a 4 PALABRAS en mayusculas para la miniatura",
   "format": "uno de: datos_curiosos | ranking | historia | motivacion | quiz | explicacion",
+  "visual_subject": "EN INGLES: el sujeto visual central y CONCRETO del video en 1-3 palabras (ej: 'flying car', 'black hole', 'ancient egypt', 'wind turbine'). Se usa para anclar TODAS las busquedas de stock al tema.",
   "segments": [
-    {{"text": "frase narrada corta", "keywords": ["2-3 terminos EN INGLES para buscar video stock que ilustre esta frase"]}}
+    {{"text": "frase narrada corta", "keywords": ["2-3 terminos EN INGLES, cosas FISICAS y FILMABLES que ilustren esta frase concreta"]}}
   ]
 }}
 {seg_hint}
-Las keywords deben ser visuales y concretas en inglés (ej: "galaxy stars", "ancient ruins", "stock market")."""
+
+REGLAS PARA LAS KEYWORDS DE STOCK (clave para la credibilidad del video):
+- SIEMPRE en inglés (el banco de stock indexa en inglés).
+- Objetos, lugares, acciones o escenas CONCRETAS y FILMABLES; NADA de conceptos abstractos.
+  Bien: "wind turbine", "city traffic aerial", "microscope lab", "roman colosseum", "stock market screen".
+  Mal (abstracto, trae relleno genérico): "success", "future", "power", "idea", "money mindset".
+- Cada frase debe describir algo que se pueda VER; si la frase es abstracta, elegí el objeto/lugar
+  más representativo del tema (ej: para "la economía colapsó" → "empty supermarket shelves", "wall street traders").
+- Preferí términos específicos del tema por sobre genéricos, para que el clip pegue con lo que se narra."""
 
 def _extract_json(s):
     s = s.strip()
@@ -105,36 +114,6 @@ def _gemini(messages):
     r.raise_for_status()
     return r.json()["candidates"][0]["content"]["parts"][0]["text"]
 
-def keywords_for_text(texts, niche=""):
-    """
-    Genera 2-3 keywords EN INGLÉS por cada texto (frase narrada o plano de un
-    guion propio), para poder buscar video stock (Pexels/Pixabay) cuando el
-    usuario sube su propio guion sin imágenes. Devuelve una lista de listas de
-    keywords, en el mismo orden y misma cantidad que 'texts'.
-    """
-    texts = list(texts)
-    if not texts:
-        return []
-    items = "\n".join(f"{i}: {t}" for i, t in enumerate(texts))
-    prompt = (
-        f"Nicho del canal: {niche or 'general'}.\n"
-        "Para cada frase/plano numerado de abajo (puede estar en español), devolvé "
-        "2-3 palabras clave EN INGLÉS, visuales y concretas, para buscar un video "
-        "stock (Pexels) que lo ilustre.\n\n"
-        f"{items}\n\n"
-        'Devolvé SOLO un JSON con esta forma EXACTA: {"keywords": [["kw1","kw2"], ...]} '
-        "con exactamente un array de keywords por cada frase/plano, en el mismo orden."
-    )
-    messages = [{"role": "system", "content": "Respondés SIEMPRE en JSON válido, sin texto extra."},
-                {"role": "user", "content": prompt}]
-    raw = _gemini(messages) if PROVIDER == "gemini" else _groq(messages)
-    data = _extract_json(raw)
-    kws = data.get("keywords") or []
-    # Asegurar misma longitud que texts (rellenar con listas vacías si faltan)
-    if len(kws) < len(texts):
-        kws = kws + [[] for _ in range(len(texts) - len(kws))]
-    return kws[:len(texts)]
-
 def generate(channel, vtype="short", seed_title=None, trends=None):
     """Devuelve dict con title, hook, description, tags, hashtags, thumbnail_text, format, segments."""
     messages = [{"role": "system", "content": SYSTEM},
@@ -145,5 +124,11 @@ def generate(channel, vtype="short", seed_title=None, trends=None):
     data.setdefault("hashtags", [])
     data.setdefault("thumbnail_text", (data.get("title") or "")[:24])
     data.setdefault("format", "datos_curiosos")
+    # visual_subject: ancla para las búsquedas de stock. Si el LLM no lo dio, lo derivamos.
+    if not (data.get("visual_subject") or "").strip():
+        base = (data.get("title") or channel.get("niche") or "").lower()
+        base = re.sub(r"[¿?¡!\"'.:]", "", base)
+        base = re.sub(r"\b(sabias|sabes|conoces|por que|porque|cuantos|cuantas|como|que|cual|de|la|el|los|las|un|una|en|y|a|se|su|para|del)\b", " ", base)
+        data["visual_subject"] = " ".join(base.split()[:3]).strip() or (channel.get("niche") or "")
     data["full_text"] = " ".join(s["text"].strip() for s in data.get("segments", []))
     return data
