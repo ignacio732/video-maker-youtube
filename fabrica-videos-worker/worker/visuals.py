@@ -182,6 +182,18 @@ def fetch_visuals(segments, seg_durations, subject, outdir, vtype="short", w=108
         out.append(choose_visual(seg, subject, outdir, i, w, h, orientation, dur, used_ids))
     return out
 
+def fill_gaps(visual_list, segments, seg_durations, subject, outdir, vtype="short", w=1080, h=1920):
+    """Completa SOLO los segmentos marcados 'gradient' con stock relevante (eficiente)."""
+    orientation = "portrait" if vtype == "short" else "landscape"
+    used_ids = set()
+    for i, vis in enumerate(visual_list):
+        if vis.get("type") == "gradient":
+            dur = seg_durations[i] if i < len(seg_durations) else 3.0
+            got = choose_visual(segments[i], subject, outdir, i, w, h, orientation, dur, used_ids)
+            if got.get("type") in ("video", "image"):
+                visual_list[i] = got
+    return visual_list
+
 # ----------------------------------------------------- COMPAT (API anterior)
 def fetch_clips(segments, outdir, vtype="short"):
     """Compatibilidad: devuelve solo rutas de vídeo (sin fotos/gradiente)."""
