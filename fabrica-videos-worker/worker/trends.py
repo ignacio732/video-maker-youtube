@@ -56,6 +56,7 @@ def google_news(query, hl="es-419", gl="AR", maxn=10):
         out = []
         for it in items[:maxn]:
             title = _clean(it.findtext("title"))
+            # Google News agrega " - Medio" al final; lo recortamos
             title = re.sub(r"\s+-\s+[^-]+$", "", title)
             if title:
                 out.append({"topic": title, "source": "google_news", "metric": 1})
@@ -88,11 +89,16 @@ def for_channel(channel, max_topics=8):
     # Novedad general (lo que la gente está mirando)
     items += [w for w in wikipedia_hot(lang)[:15]]
     items = _dedupe(items)
-    kws_l = [k.lower() for k in kws]
+    # Términos de relevancia: keywords + palabras del nicho de +4 letras (sin stopwords)
+    terms = [k.lower() for k in kws]
+    terms += [w for w in re.split(r"[^a-záéíóúñ]+", niche.lower()) if len(w) > 4]
+    terms = list(dict.fromkeys(terms))
     def relevant(it):
         t = it["topic"].lower()
-        return any(k in t for k in kws_l) or any(k in t for k in niche.lower().split())
+        return any(term in t for term in terms)
+    # Solo tendencias relevantes al nicho (evita temas genéricos off-niche).
+    # Si ninguna matchea, se devuelve vacío y el LLM elige un tema propio del nicho.
+    rel = [x for x in items if relevant(x)]
     order = {"gdelt": 0, "google_news": 1, "wikipedia": 2}
-    items.sort(key=lambda x: (0 if relevant(x) else 1,
-                              order.get(x["source"], 3), -x.get("metric", 0)))
-    return items[:max_topics]
+    rel.sort(key=lambda x: (order.get(x["source"], 3), -x.get("metric", 0)))
+    return rel[:max_topics]
