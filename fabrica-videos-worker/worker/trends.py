@@ -1,104 +1,195 @@
 """
-Detección de tendencias / temas virales — 100% gratis, sin API keys.
-Fuentes: Wikipedia Pageviews (lo más visto), GDELT (noticias globales),
-Google News RSS (por keyword del nicho). Todo con stdlib + requests.
-Cada fuente es tolerante a fallos (si una cae, sigue con las demás).
+Detección de tendencias / temas VIRALES por rubro — 100% gratis, sin API keys.
+Fuentes: Google News (búsqueda por rubro), Google Trends (RSS de búsquedas del momento),
+GDELT (noticias globales), Wikipedia Pageviews (lo más visto). stdlib + requests.
+
+Filosofía: contenido evergreen y viral (salud, ciencia, tecnología, curiosidades,
+mente, fitness, animales, historia, espacio) y NADA de política/economía de país.
+Cada tema queda etiquetado con su 'category' (rubro).
 """
 import os, requests, datetime, xml.etree.ElementTree as ET, re, html
 
-UA = {"User-Agent": "FabricaVideosYouTube/1.0 (contenido educativo)"}
+UA = {"User-Agent": "Mozilla/5.0 (compatible; FabricaVideosYouTube/1.0)"}
 
-_STOP_WIKI = ("Wikipedia:", "Especial:", "Portada", "Wikcionario", "Anexo:",
-              "Ayuda:", "Categoría:", "Plantilla:", "(desambiguación)")
+# --- Filtro: descartar política y economía de país (no vira / polariza) ---
+# Se matchea por LÍMITE DE PALABRA (prefijo) para no cazar falsos positivos
+# (ej. "lula" dentro de "celulares"). Los stems ('elecc','econom') cubren plurales.
+_POL_ECO = [
+    # política (stems y nombres)
+    "politic", "elecc", "comicios", "referend", "president", "ministr", "senad",
+    "diputad", "gobern", "oficialismo", "oposici", "decreto", "fiscal", "sindicat",
+    "votac", "voto", "parlament", "intendente", "piquete",
+    "milei", "macri", "massa", "kirchner", "kicillof", "trump", "biden", "putin",
+    "maduro", "petro", "boric", "sheinbaum", "lula", "bolsonaro", "congreso",
+    # economía
+    "inflac", "econom", "dólar", "dolar", "fmi", "riesgo país", "riesgo pais",
+    "merval", "bonos", "cepo", "devaluac", "cotizac", "jubilac", "impuest", "subsid",
+    "arancel", "déficit", "deficit", "superávit", "superavit", "salario",
+    "banco central", "peso argentino", "tasa de interés",
+    # conflicto geopolítico actual (historia general SÍ pasa: 'guerra' suelto no filtra)
+    "hamas", "gaza", "guerra en", "misil",
+]
+_POL_RE = re.compile(r"\b(" + "|".join(re.escape(k) for k in _POL_ECO) + r")", re.IGNORECASE)
+def _political(text):
+    return bool(_POL_RE.search(text or ""))
+
+# --- Rubros: cada uno con su consulta de Google News y de GDELT ---
+CATEGORIES = {
+    "salud":        {"gn": "salud OR bienestar OR hábitos saludables OR sueño OR longevidad",
+                     "gdelt": "health wellbeing longevity", "kw": ["salud","bienestar","cuerpo","dormir","longev"]},
+    "fitness":      {"gn": "ejercicio OR entrenamiento OR músculo OR gimnasio OR fuerza",
+                     "gdelt": "fitness exercise muscle", "kw": ["ejercicio","muscul","fuerza","entren","gimnasio"]},
+    "ciencia":      {"gn": "estudio científico OR descubrimiento OR ciencia OR investigación",
+                     "gdelt": "science discovery study", "kw": ["ciencia","estudio","descubr","investig","cuánt","cuant","físic","fisic","química","quimic"]},
+    "espacio":      {"gn": "espacio OR astronomía OR NASA OR planeta OR telescopio OR eclipse",
+                     "gdelt": "space astronomy NASA", "kw": ["espacio","astro","planeta","nasa","eclipse","luna"]},
+    "tecnologia":   {"gn": "inteligencia artificial OR robot OR tecnología OR innovación OR gadget",
+                     "gdelt": "artificial intelligence robot technology", "kw": ["tecno","robot","inteligencia artificial","ia ","gadget","app"]},
+    "mente":        {"gn": "psicología OR cerebro OR productividad OR hábitos OR memoria",
+                     "gdelt": "psychology brain productivity", "kw": ["psico","cerebro","mente","habito","hábito","memoria"]},
+    "curiosidades": {"gn": "curiosidad OR sabías que OR insólito OR récord mundial OR dato curioso",
+                     "gdelt": "amazing fact record", "kw": ["curios","insólit","insolit","récord","record","sabías"]},
+    "animales":     {"gn": "animales OR naturaleza OR especie OR océano OR vida salvaje",
+                     "gdelt": "animals wildlife nature", "kw": ["animal","natura","especie","océano","oceano","salvaje"]},
+    "historia":     {"gn": "historia OR arqueología OR civilización antigua OR descubrimiento histórico",
+                     "gdelt": "history archaeology ancient", "kw": ["histor","arqueo","civiliz","antigu"]},
+    "dinero":       {"gn": "finanzas personales OR ahorro OR hábitos de dinero OR productividad financiera",
+                     "gdelt": "personal finance saving money habits", "kw": ["ahorr","finanzas","dinero","emprend","invertir"]},
+}
 
 def _clean(s):
     return html.unescape(re.sub(r"<[^>]+>", "", s or "")).strip()
 
-def wikipedia_hot(lang="es", limit=30):
-    """Artículos más vistos de ayer (novedad/atención)."""
+# -------------------------------------------------------------------- FUENTES
+def google_news(query, hl="es-419", gl="AR", maxn=10):
+    """Titulares de Google News por búsqueda (funciona en runners con internet abierta)."""
+    try:
+        url = (f"https://news.google.com/rss/search?q={requests.utils.quote(query)}"
+               f"&hl={hl}&gl={gl}&ceid={gl}:{hl.split('-')[0]}")
+        xml = requests.get(url, headers=UA, timeout=20, allow_redirects=True).text
+        root = ET.fromstring(xml)
+        out = []
+        for it in root.findall(".//item")[:maxn]:
+            title = re.sub(r"\s+-\s+[^-]+$", "", _clean(it.findtext("title")))
+            if title:
+                out.append(title)
+        return out
+    except Exception:
+        return []
+
+def google_trends(geo="AR", maxn=20):
+    """Búsquedas en tendencia ahora (RSS de Google Trends)."""
+    try:
+        url = f"https://trends.google.com/trending/rss?geo={geo}"
+        xml = requests.get(url, headers=UA, timeout=20).text
+        root = ET.fromstring(xml)
+        out = []
+        for it in root.findall(".//item")[:maxn]:
+            t = _clean(it.findtext("title"))
+            if t:
+                out.append(t)
+        return out
+    except Exception:
+        return []
+
+def gdelt_news(query, timespan="3d", maxrecords=8):
+    try:
+        url = ("https://api.gdeltproject.org/api/v2/doc/doc?"
+               f"query={requests.utils.quote(query)}&mode=ArtList&maxrecords={maxrecords}"
+               f"&timespan={timespan}&format=json&sort=hybridrel")
+        arts = requests.get(url, headers=UA, timeout=20).json().get("articles", [])
+        return [_clean(a.get("title")) for a in arts if a.get("title")]
+    except Exception:
+        return []
+
+def wikipedia_hot(lang="es", limit=25):
     try:
         d = datetime.date.today() - datetime.timedelta(days=1)
         url = (f"https://wikimedia.org/api/rest_v1/metrics/pageviews/top/"
                f"{lang}.wikipedia/all-access/{d.year}/{d.month:02d}/{d.day:02d}")
         arts = requests.get(url, headers=UA, timeout=20).json()["items"][0]["articles"]
+        stop = ("Wikipedia:", "Especial:", "Portada", "Anexo:", "Ayuda:", "Categoría:",
+                "Plantilla:", "(desambiguación)", "Wikcionario")
         out = []
         for a in arts:
             t = a["article"].replace("_", " ")
-            if any(s in t for s in _STOP_WIKI):
+            if any(s in t for s in stop):
                 continue
-            out.append({"topic": t, "source": "wikipedia", "metric": a["views"]})
+            out.append(t)
             if len(out) >= limit:
                 break
         return out
     except Exception:
         return []
 
-def gdelt_news(query, timespan="2d", maxrecords=10):
-    """Noticias recientes por tema (volumen = señal de interés)."""
-    try:
-        url = ("https://api.gdeltproject.org/api/v2/doc/doc?"
-               f"query={requests.utils.quote(query)}&mode=ArtList&maxrecords={maxrecords}"
-               f"&timespan={timespan}&format=json&sort=hybridrel")
-        arts = requests.get(url, headers=UA, timeout=20).json().get("articles", [])
-        return [{"topic": _clean(a.get("title")), "source": "gdelt", "metric": 1}
-                for a in arts if a.get("title")]
-    except Exception:
-        return []
-
-def google_news(query, hl="es-419", gl="AR", maxn=10):
-    """Titulares de Google News por keyword (stdlib, sin feedparser)."""
-    try:
-        url = (f"https://news.google.com/rss/search?q={requests.utils.quote(query)}"
-               f"&hl={hl}&gl={gl}&ceid={gl}:{hl.split('-')[0]}")
-        xml = requests.get(url, headers=UA, timeout=20).text
-        root = ET.fromstring(xml)
-        items = root.findall(".//item")
-        out = []
-        for it in items[:maxn]:
-            title = _clean(it.findtext("title"))
-            # Google News agrega " - Medio" al final; lo recortamos
-            title = re.sub(r"\s+-\s+[^-]+$", "", title)
-            if title:
-                out.append({"topic": title, "source": "google_news", "metric": 1})
-        return out
-    except Exception:
-        return []
-
+# -------------------------------------------------------------------- HELPERS
 def _dedupe(items):
     seen, out = set(), []
     for it in items:
-        k = re.sub(r"[^a-z0-9]", "", it["topic"].lower())[:40]
-        if k and k not in seen:
+        k = re.sub(r"[^a-z0-9]", "", it["topic"].lower())[:44]
+        if k and k not in seen and len(it["topic"]) > 8:
             seen.add(k)
             out.append(it)
     return out
 
-def for_channel(channel, max_topics=8):
+def _categorize_free(topic):
+    """Asigna un rubro a un tema suelto (Google Trends/Wikipedia) por keywords."""
+    t = topic.lower()
+    for cat, cfg in CATEGORIES.items():
+        if any(k in t for k in cfg["kw"]):
+            return cat
+    return None
+
+def discover(categories=None, hl="es-419", gl="AR", per_cat=4, include_trends=True):
     """
-    Devuelve una lista de temas candidatos para un canal, combinando fuentes
-    según su nicho/keywords. Ordenados por relevancia simple.
+    Descubre temas por rubro (evergreen/viral). Devuelve lista de
+    {topic, source, category, metric}, ya filtrada de política/economía.
     """
-    kws = channel.get("keywords") or []
-    niche = channel.get("niche", "")
-    query = " OR ".join(kws[:4]) if kws else niche
-    lang = channel.get("language", "es")
+    cats = categories or list(CATEGORIES.keys())
     items = []
-    # Noticias del nicho (temas del momento)
-    items += gdelt_news(query)[:6]
-    items += google_news(query)[:6]
-    # Novedad general (lo que la gente está mirando)
-    items += [w for w in wikipedia_hot(lang)[:15]]
+    for cat in cats:
+        cfg = CATEGORIES.get(cat)
+        if not cfg:
+            continue
+        for t in google_news(cfg["gn"], hl, gl, maxn=per_cat + 2):
+            items.append({"topic": t, "source": "google_news", "category": cat, "metric": 2})
+        for t in gdelt_news(cfg["gdelt"], maxrecords=per_cat)[:per_cat]:
+            items.append({"topic": t, "source": "gdelt", "category": cat, "metric": 1})
+    # Google Trends (lo que se busca ahora) — solo lo que cae en algún rubro
+    if include_trends:
+        for t in google_trends(gl):
+            c = _categorize_free(t)
+            if c and (not categories or c in cats):
+                items.append({"topic": t, "source": "google_trends", "category": c, "metric": 3})
+    # Filtrar política/economía y deduplicar
+    items = [x for x in items if not _political(x["topic"])]
     items = _dedupe(items)
-    # Términos de relevancia: keywords + palabras del nicho de +4 letras (sin stopwords)
-    terms = [k.lower() for k in kws]
-    terms += [w for w in re.split(r"[^a-záéíóúñ]+", niche.lower()) if len(w) > 4]
-    terms = list(dict.fromkeys(terms))
-    def relevant(it):
-        t = it["topic"].lower()
-        return any(term in t for term in terms)
-    # Solo tendencias relevantes al nicho (evita temas genéricos off-niche).
-    # Si ninguna matchea, se devuelve vacío y el LLM elige un tema propio del nicho.
-    rel = [x for x in items if relevant(x)]
-    order = {"gdelt": 0, "google_news": 1, "wikipedia": 2}
-    rel.sort(key=lambda x: (order.get(x["source"], 3), -x.get("metric", 0)))
-    return rel[:max_topics]
+    order = {"google_trends": 0, "google_news": 1, "gdelt": 2}
+    items.sort(key=lambda x: (order.get(x["source"], 3), -x.get("metric", 0)))
+    return items
+
+def _channel_categories(channel):
+    """Elige los rubros relevantes al canal según su nicho/keywords."""
+    blob = f"{channel.get('niche','')} {' '.join(channel.get('keywords') or [])}".lower()
+    cats = [cat for cat, cfg in CATEGORIES.items() if any(k in blob for k in cfg["kw"])]
+    # si no matchea ninguno, usar un set evergreen amplio
+    return cats or ["curiosidades", "ciencia", "salud", "tecnologia", "mente"]
+
+def for_channel(channel, max_topics=8):
+    """Temas candidatos para un canal (rubros afines, sin política/economía)."""
+    cats = _channel_categories(channel)
+    gl = "AR"; hl = "es-419"
+    lang = channel.get("language", "es")
+    items = discover(cats, hl, gl, per_cat=4)
+    # además, novedad general filtrada por rubro
+    for t in wikipedia_hot(lang):
+        c = _categorize_free(t)
+        if c and c in cats and not _political(t):
+            items.append({"topic": t, "source": "wikipedia", "category": c, "metric": 1})
+    items = [x for x in items if not _political(x["topic"])]
+    items = _dedupe(items)
+    return items[:max_topics]
+
+def discover_global(per_cat=3):
+    """Para el dashboard: algunos temas frescos de CADA rubro."""
+    return discover(list(CATEGORIES.keys()), per_cat=per_cat)
