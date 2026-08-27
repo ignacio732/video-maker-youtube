@@ -255,3 +255,33 @@ def compose_from_clips(clips, audio_mp3, ass_path, out_mp4, w=1080, h=1920, musi
                 "-pix_fmt","yuv420p","-c:a","aac","-b:a","192k","-r","30", out_mp4]
         _run(cmd)
     return out_mp4
+
+def compose_from_images(images, audio_mp3, ass_path, out_mp4, w=1080, h=1920, music=None):
+    """Render con IMÁGENES propias del usuario: Ken Burns (zoom/paneo) secuenciado + voz + subs."""
+    dur = audio_duration(audio_mp3) + 0.4
+    n = len(images)
+    per = dur / max(1, n)
+    inputs, filters = [], []
+    for idx, img in enumerate(images):
+        inputs += ["-loop", "1", "-t", f"{per:.2f}", "-i", img]
+        filters.append(
+            f"[{idx}:v]scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h},"
+            f"zoompan=z='min(zoom+0.0012,1.15)':d={int(per*30)}:"
+            f"x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s={w}x{h}:fps=30,"
+            f"setsar=1,setpts=PTS-STARTPTS[v{idx}]")
+    concat = "".join(f"[v{i}]" for i in range(n)) + f"concat=n={n}:v=1:a=0[vc]"
+    ass = ass_path.replace(":", "\\:")
+    fc = ";".join(filters) + ";" + concat + f";[vc]ass={ass}[vout]"
+    cmd = ["ffmpeg", "-y"] + inputs + ["-i", audio_mp3]
+    ai = n
+    if music and os.path.exists(music):
+        cmd += ["-stream_loop", "-1", "-i", music]
+        fc += f";[{ai}:a]volume=1.0[vv];[{ai+1}:a]volume=0.12[mm];[vv][mm]amix=inputs=2:duration=first[aout]"
+        amap = "[aout]"
+    else:
+        amap = f"{ai}:a"
+    cmd += ["-filter_complex", fc, "-map", "[vout]", "-map", amap,
+            "-t", f"{dur:.2f}", "-c:v", "libx264", "-preset", "medium", "-crf", "23",
+            "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k", "-r", "30", out_mp4]
+    _run(cmd)
+    return out_mp4
