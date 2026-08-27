@@ -101,11 +101,20 @@ def upload_media(local_path, dest_name, content_type="video/mp4"):
 def upload_video(local_path, dest_name):
     return upload_media(local_path, dest_name, "video/mp4")
 
-def add_trend(channel_id, topic, source):
+def add_trend(channel_id, topic, source, category=None):
     try:
-        return _post("trends", {"channel_id": channel_id, "topic": topic[:200], "source": source})
+        return _post("trends", {"channel_id": channel_id, "topic": topic[:200],
+                                "source": source, "category": category})
     except Exception as e:
         print("add_trend falló:", e)
+
+def clear_global_trends():
+    """Borra las tendencias globales (channel_id null) para refrescar la vista del dashboard."""
+    try:
+        h = dict(H)
+        requests.delete(f"{BASE}/trends?channel_id=is.null", headers=h, timeout=30)
+    except Exception as e:
+        print("clear_global_trends falló:", e)
 
 def log(step, message, level="info", vid=None, cid=None):
     try:
