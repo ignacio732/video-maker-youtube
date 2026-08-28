@@ -157,22 +157,40 @@ def make_thumbnail(text, theme, out_png, w=1280, h=720, accent=None, bg_image=No
     # barra de acento (color del canal)
     d.rectangle([0, 0, int(w * 0.02), h], fill=acc)
     words = (text or "").upper().split()
-    # armar 2-3 líneas
-    lines, cur = [], ""
-    for wd in words:
-        if len(cur + " " + wd) > 14 and cur:
-            lines.append(cur); cur = wd
-        else:
-            cur = (cur + " " + wd).strip()
-    if cur:
-        lines.append(cur)
-    lines = lines[:3]
-    fs = int(h * (0.20 if len(lines) <= 2 else 0.15))
+    max_w = w * 0.90  # nunca ocupar todo el ancho: margen real a los costados
+
+    def _wrap(font):
+        """Arma líneas midiendo el ANCHO REAL en píxeles (no cantidad de caracteres),
+        para que el texto nunca se corte fuera del cuadro (bug real que se vio en
+        producción: 'NO ES SOLO EL DÍA 14' se cortaba a la derecha)."""
+        lines, cur = [], ""
+        for wd in words:
+            trial = (cur + " " + wd).strip()
+            if cur and d.textbbox((0, 0), trial, font=font)[2] > max_w:
+                lines.append(cur); cur = wd
+            else:
+                cur = trial
+        if cur:
+            lines.append(cur)
+        return lines
+
+    # Elegir el tamaño de fuente más grande que, tras el ajuste por ancho real,
+    # entre en 3 líneas o menos Y en el alto disponible.
+    fs = int(h * 0.20)
     try:
         font = ImageFont.truetype(FONT, fs)
     except Exception:
         font = ImageFont.load_default()
-    total_h = len(lines) * fs * 1.1
+    lines = _wrap(font)
+    while (len(lines) > 3 or len(lines) * fs * 1.15 > h * 0.85) and fs > int(h * 0.08):
+        fs = int(fs * 0.9)
+        try:
+            font = ImageFont.truetype(FONT, fs)
+        except Exception:
+            break
+        lines = _wrap(font)
+    lines = lines[:3]
+    total_h = len(lines) * fs * 1.15
     y = (h - total_h) / 2
     for ln in lines:
         bb = d.textbbox((0, 0), ln, font=font)
@@ -183,7 +201,7 @@ def make_thumbnail(text, theme, out_png, w=1280, h=720, accent=None, bg_image=No
             for dy in (-4, 0, 4):
                 d.text((x + dx, y + dy), ln, font=font, fill=(0, 0, 0))
         d.text((x, y), ln, font=font, fill=(255, 255, 255))
-        y += fs * 1.1
+        y += fs * 1.15
     img.save(out_png, "PNG")
     try:
         os.remove(bg)
