@@ -62,6 +62,11 @@ CATEGORIES = {
                      "gdelt": "history archaeology ancient", "kw": ["histor","arqueo","civiliz","antigu"]},
     "dinero":       {"gn": "finanzas personales OR ahorro OR hábitos de dinero OR productividad financiera",
                      "gdelt": "personal finance saving money habits", "kw": ["ahorr","finanzas","dinero","emprend","invertir"]},
+    "fertilidad":   {"gn": "fertilidad OR ovulación OR reserva ovárica OR FIV OR reproducción asistida OR fertilidad masculina",
+                     "gdelt": "fertility ovulation IVF reproductive health",
+                     "kw": ["fertilidad","ovula","infertil","amh","fiv","icsi","reserva ovárica","reserva ovarica",
+                            "seminograma","reproducci\u00f3n asistida","reproduccion asistida","endometriosis",
+                            "inseminaci\u00f3n","inseminacion","congelar óvulos","congelar ovulos"]},
 }
 
 def _clean(s):
