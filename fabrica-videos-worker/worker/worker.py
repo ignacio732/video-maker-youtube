@@ -149,7 +149,19 @@ def process_video(v):
                     db.log("trends", f"{len(trend_topics)} tendencias ({cats})", vid=vid, cid=ch["id"])
                 except Exception as e:
                     db.log("trends", f"sin tendencias: {e}", "warn", vid, ch["id"])
-            data = llm.generate(ch, vtype, seed_title=v.get("title"), trends=trend_topics)
+            data = None
+            try:
+                data = llm.generate(ch, vtype, seed_title=v.get("title"), trends=trend_topics)
+            except Exception as e:
+                if trend_topics:
+                    # Si falló con tendencias (ej. una tendencia sensible que el LLM rechaza,
+                    # o cualquier otro problema puntual del prompt), reintentar sin tendencias
+                    # en vez de perder el video entero.
+                    db.log("script", f"Guion con tendencias falló ({e}); reintentando sin tendencias",
+                           "warn", vid, ch["id"])
+                    data = llm.generate(ch, vtype, seed_title=v.get("title"), trends=None)
+                else:
+                    raise
         db.add_script(vid, data["full_text"], data["segments"])
         db.add_idea(ch["id"], data["title"], data.get("hook"), None, vtype, "used")
         db.update_video(vid, title=data["title"],
