@@ -21,11 +21,37 @@ _STOP = {
     "the","a","an","of","and","or","to","in","on","at","for","with","from","by","as","is",
     "are","be","this","that","these","those","your","you","it","its","into","over","under",
     "video","stock","footage","clip","background","scene","shot","view","con","de","la","el",
-    "los","las","un","una","para","por","que","del","una","the",
+    "los","las","un","una","para","por","que","del","una","the","was","has","had","not","but",
+    "all","new","how","why","she","him","her","who","did","yes","per","via","top","use","can",
+    "out","one","two","big","set","and","day","way",
 }
 
-def _tokens(s):
-    return [t for t in re.split(r"[^a-z0-9]+", (s or "").lower()) if len(t) >= 4 and t not in _STOP]
+# Palabras EN INGLÉS cortas pero muy polisémicas: si son el ÚNICO match, generan falsos
+# positivos clásicos de banco de stock (ej. "spring" → trae temporada primavera/flores,
+# no un resorte metálico; "tube" → trae tubos de ensayo de laboratorio). Se excluyen del
+# conteo de relevancia salvo que aparezcan como parte de una FRASE completa (ver _phrase_hit).
+_AMBIGUOUS = {
+    "spring","tube","bank","bat","mouse","seal","crane","bar","palm","mine","plant",
+    "present","tank","fair","novel","current","match","pool","pitcher","iron","board",
+    "pipe","drive","band","dish","letter","case",
+}
+
+def _tokens(s, drop_ambiguous=False):
+    toks = [t for t in re.split(r"[^a-z0-9]+", (s or "").lower()) if len(t) >= 3 and t not in _STOP]
+    if drop_ambiguous:
+        toks = [t for t in toks if t not in _AMBIGUOUS]
+    return toks
+
+def _phrase_hit(keywords, text):
+    """True si alguna de las keywords ORIGINALES (frase completa, no tokenizada) aparece
+    literalmente en el texto del candidato (slug de Pexels / alt de la foto). Es una señal
+    de relevancia mucho más fuerte y precisa que el overlap de tokens sueltos."""
+    t = (text or "").lower()
+    for kw in keywords:
+        kw = (kw or "").strip().lower()
+        if len(kw) >= 5 and kw in t:
+            return True
+    return False
 
 def _download(url, outdir, name):
     r = requests.get(url, stream=True, timeout=90, headers=UA)
@@ -80,30 +106,52 @@ def _orient_ok(width, height, orientation):
     return (orientation == "portrait" and height >= width) or \
            (orientation == "landscape" and width >= height)
 
-def _score_video(v, want, min_dur, orientation):
-    slug_tokens = set(_tokens(v.get("url", "")))
+def _score_video(v, want, keywords, min_dur, orientation):
+    """
+    Puntúa un candidato. Acepta SOLO si hay evidencia real de relevancia:
+      - una FRASE completa de las keywords aparece literalmente en el slug (fuerte), o
+      - al menos 2 tokens distintos (ya sin las palabras ambiguas tipo 'spring'/'tube')
+        coinciden con el tema.
+    Un único token ambiguo NUNCA alcanza para aceptar un candidato: es la causa más común
+    de clips sin relación con el video (ej. 'spring' trayendo flores de primavera).
+    """
+    slug = v.get("url", "")
+    slug_tokens = set(_tokens(slug, drop_ambiguous=True))
     overlap = len(slug_tokens & set(want))
+    phrase = _phrase_hit(keywords, slug)
+    if not phrase and overlap < 2:
+        return 0, 0
     dur = v.get("duration") or 0
     ok_dur = dur >= max(3, min_dur * 0.5)
     ori = _orient_ok(v.get("width"), v.get("height"), orientation)
-    score = overlap * 10 + (2 if ok_dur else 0) + (2 if ori else 0)
-    return score, overlap
+    score = (20 if phrase else 0) + overlap * 6 + (2 if ok_dur else 0) + (2 if ori else 0)
+    return score, max(overlap, 1 if phrase else 0)
 
-def _score_photo(p, want):
-    txt = set(_tokens(p.get("alt", "")) + _tokens(p.get("url", "")))
-    return len(txt & set(want))
+def _score_photo(p, want, keywords):
+    alt, url = p.get("alt", ""), p.get("url", "")
+    txt = set(_tokens(alt, drop_ambiguous=True) + _tokens(url, drop_ambiguous=True))
+    overlap = len(txt & set(want))
+    phrase = _phrase_hit(keywords, alt) or _phrase_hit(keywords, url)
+    if not phrase and overlap < 2:
+        return 0
+    return (20 if phrase else 0) + overlap * 6
 
 def _queries(kws, subject):
-    """Consultas ordenadas de más específica (tema+keyword) a más general."""
+    """Consultas ordenadas de más específica (tema+keyword) a más general.
+    Las keywords ambiguas en solitario (spring, tube, etc.) NUNCA se buscan solas:
+    siempre van acompañadas del tema para desambiguar la búsqueda en el banco de stock."""
     qs = []
     subj = (subject or "").strip()
-    for kw in kws[:3]:
-        kw = (kw or "").strip()
-        if not kw:
-            continue
+    kws = [k for k in kws[:3] if (k or "").strip()]
+    if subj and kws:
+        qs.append(f"{' '.join(k.strip() for k in kws)} {subj}")
+    for kw in kws:
+        kw = kw.strip()
+        ambiguous_alone = bool(set(_tokens(kw)) & _AMBIGUOUS) and len(_tokens(kw)) == 1
         if subj and subj.lower() not in kw.lower():
             qs.append(f"{kw} {subj}")
-        qs.append(kw)
+        if not ambiguous_alone:
+            qs.append(kw)
     if subj:
         qs.append(subj)
     # dedupe conservando orden
@@ -114,23 +162,25 @@ def choose_visual(seg, subject, outdir, idx, w, h, orientation, min_dur, used_id
     kws = seg.get("keywords") or []
     want = []
     for kw in kws:
-        want += _tokens(kw)
-    want += _tokens(subject)
+        want += _tokens(kw, drop_ambiguous=True)
+    want += _tokens(subject, drop_ambiguous=True)
     want = list(dict.fromkeys(want))
+    all_kw_and_subject = kws + ([subject] if subject else [])
     queries = _queries(kws, subject)
 
-    # 1) VÍDEO relevante (exige al menos 1 token del tema en común)
+    # 1) VÍDEO relevante (exige frase completa o >=2 tokens de tema en común;
+    #    un solo token ambiguo tipo 'spring'/'tube' nunca alcanza — ver _score_video)
     best, best_score = None, 0
     for q in queries:
         for v in _pexels_videos(q, orientation):
             if v.get("id") in used_ids:
                 continue
-            sc, overlap = _score_video(v, want, min_dur, orientation)
-            if overlap == 0:      # sin relación con el tema → descartar
+            sc, overlap = _score_video(v, want, all_kw_and_subject, min_dur, orientation)
+            if sc == 0:
                 continue
             if sc > best_score:
                 best, best_score = v, sc
-        if best_score >= 12:      # match fuerte: cortamos temprano
+        if best_score >= 26:      # match muy fuerte (frase completa + buena duración/orientación): cortamos
             break
     if best:
         link = _video_file(best, w, h)
@@ -148,12 +198,12 @@ def choose_visual(seg, subject, outdir, idx, w, h, orientation, min_dur, used_id
         for p in _pexels_photos(q, orientation):
             if p.get("id") in used_ids:
                 continue
-            ov = _score_photo(p, want)
+            ov = _score_photo(p, want, all_kw_and_subject)
             if ov == 0:
                 continue
             if ov > best_ps:
                 best_p, best_ps = p, ov
-        if best_ps >= 2:
+        if best_ps >= 20:
             break
     if best_p:
         src = best_p.get("src", {})
