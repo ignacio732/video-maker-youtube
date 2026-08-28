@@ -28,6 +28,13 @@ _POL_ECO = [
     "banco central", "peso argentino", "tasa de interés",
     # conflicto geopolítico actual (historia general SÍ pasa: 'guerra' suelto no filtra)
     "hamas", "gaza", "guerra en", "misil",
+    # violencia/tragedia/terrorismo real: nada de esto vira bien ni es apto para un
+    # video motivacional/curioso, y algunos proveedores de LLM rechazan directamente
+    # la generación si el prompt incluye estos temas como "tendencia a inspirar" (400).
+    "atentad", "terroris", "11-s", "11s", "torres gemelas", "al qaeda", "isis",
+    "yihad", "masacre", "tirote", "genocidio", "secuestr", "asesinat", "femicid",
+    "homicid", "violacion", "violación", "suicid", "abuso sexual", "pedofil",
+    "accidente aéreo", "accidente aereo", "tragedia", "explosion", "explosión",
 ]
 _POL_RE = re.compile(r"\b(" + "|".join(re.escape(k) for k in _POL_ECO) + r")", re.IGNORECASE)
 def _political(text):
