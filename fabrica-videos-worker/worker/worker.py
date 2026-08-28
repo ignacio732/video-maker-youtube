@@ -34,6 +34,7 @@ _SECTION_PATTERNS = [
     ("prompt_visual", r"prompt\s+visual[^:\n]*"),
     ("cta", r"cta\b"),
     ("control_factual", r"control\s+factual[^:\n]*"),
+    ("miniatura", r"(?:texto\s+de\s+)?miniatura(?:\s*\/\s*portada)?"),
 ]
 _SECTION_RE = _re.compile(
     r"(?im)^\s*(" + "|".join(p for _, p in _SECTION_PATTERNS) + r")\s*:\s*"
@@ -44,12 +45,14 @@ def parse_user_script(us):
     Si el guion propio sigue el formato con etiquetas, separa:
       - narracion: lo que hay que narrar de verdad (hook + guion de voz + cta)
       - shot_list: la lista de planos ("plano y edición") para anclar los visuales
-    Si no hay etiquetas reconocidas, devuelve (us, None): se narra todo tal cual
-    (guion simple, sin este formato).
+      - thumb_text: el texto de miniatura/portada, si el usuario lo definió
+        explícitamente (si no, el llamador decide un fallback)
+    Si no hay etiquetas reconocidas, devuelve (us, None, None): se narra todo tal
+    cual (guion simple, sin este formato).
     """
     matches = list(_SECTION_RE.finditer(us))
     if not matches:
-        return us.strip(), None
+        return us.strip(), None, None
     sections = {}
     for i, m in enumerate(matches):
         label = m.group(1).strip().lower()
@@ -61,7 +64,7 @@ def parse_user_script(us):
     narracion = " ".join(sections[k] for k in ("hook", "guion_voz", "cta") if sections.get(k)).strip()
     if not narracion:
         narracion = us.strip()
-    return narracion, sections.get("plano_edicion")
+    return narracion, sections.get("plano_edicion"), sections.get("miniatura")
 
 THEME_MAP = [
     (("espacio","universo","astronomia","cosmos","planeta"), "space"),
@@ -106,13 +109,13 @@ def process_video(v):
         import llm
         us_raw = (v.get("user_script") or "").strip()
         if us_raw:
-            narracion, shot_list = parse_user_script(us_raw)
+            narracion, shot_list, thumb_text = parse_user_script(us_raw)
             title = v.get("title") or narracion.split("\n")[0][:70]
             sents = [s.strip() for s in _re.split(r'(?<=[.!?])\s+', narracion) if s.strip()]
             segments = [{"text": s, "keywords": []} for s in sents] or [{"text": narracion, "keywords": []}]
             data = {"title": title, "hook": sents[0] if sents else title,
                     "description": "", "tags": [], "hashtags": [],
-                    "thumbnail_text": title[:24], "format": "propio",
+                    "thumbnail_text": (thumb_text or title)[:28], "format": "propio",
                     "segments": segments, "full_text": narracion}
             # Un guion propio no trae keywords en inglés como el generado por IA: sin esto,
             # el motor de stock (fetch_visuals) no tiene con qué anclar la búsqueda y todo
