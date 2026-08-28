@@ -106,6 +106,22 @@ def _orient_ok(width, height, orientation):
     return (orientation == "portrait" and height >= width) or \
            (orientation == "landscape" and width >= height)
 
+# Términos que NUNCA deben aparecer en un video, sin importar cuánto "matcheen" por
+# token: son categorías sensibles/fuera de marca que un banco de stock puede devolver
+# por coincidencia semántica accidental (ej. "tubo"+"presión" trae casquillos de bala,
+# porque un cartucho también es un "tubo" que usa "presión"). Se descartan de plano.
+_BANNED = {
+    "gun","guns","firearm","firearms","rifle","pistol","bullet","bullets","ammo",
+    "ammunition","cartridge","cartridges","shell","shells","shotgun","weapon","weapons",
+    "grenade","explosive","explosives","knife","knives","blood","gore","corpse","nude",
+    "naked","nsfw","sex","sexual","drug","drugs","cocaine","syringe","needle",
+}
+
+def _is_banned(*texts):
+    blob = " ".join(re.sub(r"[^a-z0-9 ]+", " ", (t or "").lower()) for t in texts)
+    words = set(blob.split())
+    return bool(words & _BANNED)
+
 def _score_video(v, want, keywords, min_dur, orientation):
     """
     Puntúa un candidato. Acepta SOLO si hay evidencia real de relevancia:
@@ -114,8 +130,12 @@ def _score_video(v, want, keywords, min_dur, orientation):
         coinciden con el tema.
     Un único token ambiguo NUNCA alcanza para aceptar un candidato: es la causa más común
     de clips sin relación con el video (ej. 'spring' trayendo flores de primavera).
+    Además, cualquier candidato con contenido de la lista _BANNED se descarta directamente,
+    incluso si matchea por token (ej. munición matcheando por 'tubo'/'presión').
     """
     slug = v.get("url", "")
+    if _is_banned(slug):
+        return 0, 0
     slug_tokens = set(_tokens(slug, drop_ambiguous=True))
     overlap = len(slug_tokens & set(want))
     phrase = _phrase_hit(keywords, slug)
@@ -129,6 +149,8 @@ def _score_video(v, want, keywords, min_dur, orientation):
 
 def _score_photo(p, want, keywords):
     alt, url = p.get("alt", ""), p.get("url", "")
+    if _is_banned(alt, url):
+        return 0
     txt = set(_tokens(alt, drop_ambiguous=True) + _tokens(url, drop_ambiguous=True))
     overlap = len(txt & set(want))
     phrase = _phrase_hit(keywords, alt) or _phrase_hit(keywords, url)
