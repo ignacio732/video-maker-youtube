@@ -94,7 +94,11 @@ REGLAS PARA LAS KEYWORDS DE STOCK (clave para la credibilidad del video):
   Mal (abstracto, trae relleno genérico): "success", "future", "power", "idea", "money mindset".
 - Cada frase debe describir algo que se pueda VER; si la frase es abstracta, elegí el objeto/lugar
   más representativo del tema (ej: para "la economía colapsó" → "empty supermarket shelves", "wall street traders").
-- Preferí términos específicos del tema por sobre genéricos, para que el clip pegue con lo que se narra."""
+- Preferí términos específicos del tema por sobre genéricos, para que el clip pegue con lo que se narra.
+- OJO con palabras cortas ambiguas en inglés (ej. "spring" es resorte PERO también primavera;
+  "tube" es tubo PERO en bancos de stock trae mayormente tubos de laboratorio): si una keyword
+  puede confundirse, usá SIEMPRE una frase de 2-3 palabras que la desambigüe
+  (ej. "metal coil spring" en vez de "spring"; "ink cartridge tube" en vez de "tube")."""
 
 def _extract_json(s):
     s = s.strip()
@@ -122,6 +126,39 @@ def _gemini(messages):
         timeout=90)
     r.raise_for_status()
     return r.json()["candidates"][0]["content"]["parts"][0]["text"]
+
+def visuals_for_own_script(texts, niche=""):
+    """
+    Para un guion PROPIO del usuario (no generado por el LLM): a partir de una lista
+    de textos (frases narradas, o "planos" de una sección 'Plano y edición'), devuelve
+    keywords EN INGLES por texto + un visual_subject general, para que el motor de
+    stock (visuals.fetch_visuals) tenga con qué anclar la búsqueda igual que en un
+    guion generado por IA.
+    """
+    texts = list(texts)
+    if not texts:
+        return {"visual_subject": "", "keywords": []}
+    items = "\n".join(f"{i}: {t}" for i, t in enumerate(texts))
+    prompt = (
+        f"Nicho del canal: {niche or 'general'}.\n"
+        "Esto es un guion o planificación de video PROPIO del usuario (puede estar en "
+        f"español):\n{items}\n\n"
+        'Devolvé SOLO un JSON con esta forma EXACTA: {"visual_subject": "...", "keywords": [[...], ...]}\n'
+        "- visual_subject: 1-3 palabras EN INGLES, el sujeto visual central y concreto del video.\n"
+        "- keywords: un array de 2-3 keywords EN INGLES por cada texto numerado (mismo orden y "
+        "misma cantidad), objetos/escenas CONCRETAS y FILMABLES para un banco de stock (Pexels).\n"
+        "Si una palabra puede ser ambigua en inglés (ej. 'spring' = resorte o primavera; 'tube' = "
+        "tubo o tubo de laboratorio), usá una frase de 2-3 palabras que la desambigüe "
+        "(ej. 'metal coil spring', 'ink cartridge tube')."
+    )
+    messages = [{"role": "system", "content": "Respondés SIEMPRE en JSON válido, sin texto extra."},
+                {"role": "user", "content": prompt}]
+    raw = _gemini(messages) if PROVIDER == "gemini" else _groq(messages)
+    data = _extract_json(raw)
+    kws = data.get("keywords") or []
+    if len(kws) < len(texts):
+        kws = kws + [[] for _ in range(len(texts) - len(kws))]
+    return {"visual_subject": (data.get("visual_subject") or "").strip(), "keywords": kws[:len(texts)]}
 
 def generate(channel, vtype="short", seed_title=None, trends=None):
     """Devuelve dict con title, hook, description, tags, hashtags, thumbnail_text, format, segments."""
