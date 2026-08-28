@@ -15,8 +15,26 @@ SYSTEM = (
     "segundos, que el gancho debe aparecer como TEXTO y VOZ a la vez, que hay que abrir un "
     "'open loop' y pagarlo recién al final, y que el último renglón debe encadenar con el "
     "primero (loop). Escribís frases cortas, ritmo rápido (~160 palabras/min), sin relleno. "
-    "Respondés SIEMPRE en JSON válido y en español rioplatense neutro."
+    "Respondés SIEMPRE en JSON válido."
 )
+
+def _accent_note(voice):
+    """
+    La variante de español del GUION debe ir acorde al ACENTO de la voz TTS del canal
+    (si no, suena raro: texto rioplatense narrado con acento mexicano, etc). Por defecto,
+    si el canal no tiene una voz configurada explícitamente, se usa neutro global (sirve
+    para audiencia de toda Latinoamérica, España y EE.UU. hispano).
+    """
+    v = (voice or "").lower()
+    if v.startswith("es-ar") or v.startswith("es-uy"):
+        return "Escribí en español rioplatense neutro (voseo), sin modismos extremos."
+    if v.startswith("es-mx"):
+        return "Escribí en español latinoamericano neutro con base mexicana (tuteo), sin modismos locales."
+    if v.startswith("es-es"):
+        return "Escribí en español de España neutro (tuteo o vosotros según corresponda), sin modismos locales."
+    return ("Escribí en español NEUTRO GLOBAL (tuteo estándar), apto para audiencia de toda "
+            "Latinoamérica, España y público hispano de EE.UU.: sin modismos regionales, "
+            "explicando siglas o términos poco comunes la primera vez que aparecen.")
 
 HOOKS = (
     '1) Afirmación audaz/contraintuitiva: "Todo lo que sabés de X es mentira." '
@@ -53,6 +71,8 @@ Nicho: {channel['niche']}
 Tono: {channel.get('tone') or 'informativo'}
 Audiencia: {channel.get('target_audience') or 'general'}
 Formato del video: {vtype} — duración objetivo {dur}.
+
+{_accent_note(channel.get('voice'))}
 
 IDENTIDAD DEL CANAL (mantené COHERENCIA con todos sus videos): mismo tono y estilo de voz
 en cada video; el CTA final invita a seguir el canal "{channel['name']}" para más de
