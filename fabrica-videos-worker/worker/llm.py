@@ -113,7 +113,10 @@ def _groq(messages):
         headers={"Authorization": f"Bearer {key}"},
         json={"model": GROQ_MODEL, "messages": messages, "temperature": 0.9,
               "response_format": {"type": "json_object"}}, timeout=90)
-    r.raise_for_status()
+    if r.status_code >= 400:
+        # Incluir el cuerpo de la respuesta: sin esto, un 400 no dice POR QUÉ
+        # (ej. filtro de contenido, schema inválido, modelo caído) y hay que adivinar.
+        raise RuntimeError(f"Groq {r.status_code}: {r.text[:600]}")
     return r.json()["choices"][0]["message"]["content"]
 
 def _gemini(messages):
@@ -124,7 +127,8 @@ def _gemini(messages):
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {"temperature": 0.9, "responseMimeType": "application/json"}},
         timeout=90)
-    r.raise_for_status()
+    if r.status_code >= 400:
+        raise RuntimeError(f"Gemini {r.status_code}: {r.text[:600]}")
     return r.json()["candidates"][0]["content"]["parts"][0]["text"]
 
 def visuals_for_own_script(texts, niche=""):
