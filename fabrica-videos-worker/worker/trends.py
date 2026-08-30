@@ -180,10 +180,20 @@ def discover(categories=None, hl="es-419", gl="AR", per_cat=4, include_trends=Tr
     items.sort(key=lambda x: (order.get(x["source"], 3), -x.get("metric", 0)))
     return items
 
+# Categorías "amplias" (aplican a casi cualquier nicho por accidente: palabras como
+# "estudio" o "investigación" aparecen en la descripción de canales que NO son de
+# ciencia). Si el canal matchea alguna categoría ESPECÍFICA además de una amplia,
+# se descartan las amplias — evita la "contaminación temática" (ej. Fertilidad Sin
+# Mitos recibiendo trends de "ciencia" por la palabra "estudios" en su nicho).
+_BROAD = {"ciencia", "mente", "tecnologia", "curiosidades", "salud"}
+
 def _channel_categories(channel):
     """Elige los rubros relevantes al canal según su nicho/keywords."""
     blob = f"{channel.get('niche','')} {' '.join(channel.get('keywords') or [])}".lower()
     cats = [cat for cat, cfg in CATEGORIES.items() if any(k in blob for k in cfg["kw"])]
+    specific = [c for c in cats if c not in _BROAD]
+    if specific:
+        return specific
     # si no matchea ninguno, usar un set evergreen amplio
     return cats or ["curiosidades", "ciencia", "salud", "tecnologia", "mente"]
 
