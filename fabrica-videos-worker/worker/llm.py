@@ -205,14 +205,16 @@ def metadata_for_own_script(narracion, channel, title=None):
                    "palabra clave principal al inicio.\n")
     prompt = (
         f"Canal: {channel['name']}\nNicho: {channel['niche']}\nTono: {channel.get('tone') or 'informativo'}\n\n"
-        f"Este es un guion YA ESCRITO por el usuario (es solo contexto, NO lo reescribas ni "
-        f"lo resumas en la descripción como si fuera nuevo texto):\n{narracion}\n\n"
+        f"Un usuario escribió este guion para un video (contexto, para que sepas de qué habla):\n"
+        f"---\n{narracion}\n---\n\n"
         f"{title_instr}"
-        "Generá una DESCRIPCIÓN de YouTube: la primera frase responde la pregunta/tema central "
-        "en texto plano (para que la lean bien IAs como ChatGPT/Perplexity y Google AI Overviews), "
-        "después 2-3 frases de contexto adicional, y 2-3 hashtags relevantes al final."
+        "Tu tarea es escribir una DESCRIPCIÓN DE YOUTUBE NUEVA (2 a 4 frases, NUNCA vacía): "
+        "la primera frase responde la pregunta/tema central en texto plano (para que la lean bien "
+        "IAs como ChatGPT/Perplexity y Google AI Overviews), después 1-2 frases de contexto extra "
+        "que NO estén copiadas textualmente del guion, y 2-3 hashtags relevantes al final."
         + (f" Incluí SIEMPRE el hashtag #{brand} (igual en todos los videos del canal)." if brand else "")
-        + '\n\nDevolvé SOLO un JSON con esta forma EXACTA: '
+        + '\n\nDevolvé SOLO un JSON con esta forma EXACTA (el campo "description" es OBLIGATORIO '
+        'y no puede ser un string vacío): '
         '{"title": "...", "description": "...", "tags": ["...", "..."], "hashtags": ["...", "..."]}'
     )
     messages = [{"role": "system", "content": "Respondés SIEMPRE en JSON válido, sin texto extra."},
@@ -223,6 +225,15 @@ def metadata_for_own_script(narracion, channel, title=None):
         data["title"] = title
     data.setdefault("tags", [])
     data.setdefault("hashtags", [])
+    # Salvaguarda: pase lo que pase con el LLM (a veces devuelve la descripción vacía
+    # si malinterpreta "no reescribas el guion" como "no escribas nada"), la descripción
+    # NUNCA debe quedar vacía — se arma una razonable a mano como piso mínimo.
+    if not (data.get("description") or "").strip():
+        hook = (narracion.split(".")[0] or narracion[:120]).strip()
+        fallback = f"{hook}. Más sobre {channel['niche']} en {channel['name']}."
+        if brand:
+            fallback += f" #{brand}"
+        data["description"] = fallback
     return data
 
 def visuals_for_own_script(texts, niche=""):
