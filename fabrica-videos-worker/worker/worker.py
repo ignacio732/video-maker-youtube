@@ -7,7 +7,8 @@ Uso:
   python worker.py            # procesa la cola + autopiloto de canales
   python worker.py --no-auto  # solo procesa lo que ya está en cola
 """
-import os, sys, tempfile, traceback, subprocess
+import os, sys, tempfile, traceback, subprocess, math
+from datetime import datetime, timezone
 import db, render, trends, requests, re as _re
 
 def _download(url, dest):
@@ -153,8 +154,11 @@ def process_video(v):
                 except Exception as e:
                     db.log("trends", f"sin tendencias: {e}", "warn", vid, ch["id"])
             data = None
+            recent_titles = db.get_recent_titles(ch["id"], 40)
+            top_performers = db.get_top_performers(ch["id"], 3)
             try:
-                data = llm.generate(ch, vtype, seed_title=v.get("title"), trends=trend_topics)
+                data = llm.generate(ch, vtype, seed_title=v.get("title"), trends=trend_topics,
+                                    recent_titles=recent_titles, top_performers=top_performers)
             except Exception as e:
                 if trend_topics:
                     # Si falló con tendencias (ej. una tendencia sensible que el LLM rechaza,
@@ -162,7 +166,8 @@ def process_video(v):
                     # en vez de perder el video entero.
                     db.log("script", f"Guion con tendencias falló ({e}); reintentando sin tendencias",
                            "warn", vid, ch["id"])
-                    data = llm.generate(ch, vtype, seed_title=v.get("title"), trends=None)
+                    data = llm.generate(ch, vtype, seed_title=v.get("title"), trends=None,
+                                        recent_titles=recent_titles, top_performers=top_performers)
                 else:
                     raise
         db.add_script(vid, data["full_text"], data["segments"])
@@ -322,7 +327,8 @@ def process_video(v):
             render.make_thumbnail(data.get("thumbnail_text") or data["title"], theme, thumb,
                                   accent=ch.get("accent_color"), bg_image=bg_img)
             thumb_url = db.upload_media(thumb, f"{ch.get('slug','canal')}/{vid}.png", "image/png")
-            db.update_video(vid, thumbnail_url=thumb_url)
+            style = "ai_image" if (bg_img and "img_" in os.path.basename(bg_img)) else ("frame" if bg_img else "gradient")
+            db.update_video(vid, thumbnail_url=thumb_url, thumbnail_style=style)
             db.add_asset(vid, "thumbnail", url=thumb_url)
         except Exception as e:
             db.log("thumb", f"No se pudo generar miniatura: {e}", "warn", vid, ch["id"])
@@ -330,8 +336,12 @@ def process_video(v):
         # 6) PUBLICAR — vía Blotato, SOLO al accountId exacto asignado al canal.
         #    Sin cuenta asignada NO se publica (nunca cae a otra cuenta) → evita el
         #    problema de subir al canal equivocado.
+        #    Canales AUTÓNOMOS no publican acá: los publica run_scheduled_publishing()
+        #    respetando el ritmo configurado (si no, se publicarían todos juntos apenas
+        #    terminan de renderizarse, sin ninguna cadencia real).
         db.set_status(vid, "ready")
-        publish_video(vid, ch, data, video_url, thumb_url, vtype=vtype)
+        if not ch.get("autonomous"):
+            publish_video(vid, ch, data, video_url, thumb_url, vtype=vtype)
 
 def _channel_accounts(ch):
     """Lista de cuentas destino del canal: [{platform, accountId}]. Compat con el campo viejo."""
@@ -383,7 +393,8 @@ def publish_video(vid, ch, data, video_url, thumb_url, manual=False, vtype="shor
             if plat == "youtube":
                 yt_url = url
             ok_any = True
-            db.log("publish", f"Publicado en {plat} (cuenta {acc})" + (f": {url}" if url else " ✓"),
+            fb = " [sin miniatura personalizada: cuenta no verificada por teléfono]" if resp.get("_thumbnail_fallback") else ""
+            db.log("publish", f"Publicado en {plat} (cuenta {acc})" + (f": {url}" if url else " ✓") + fb,
                    vid=vid, cid=ch["id"])
         except Exception as e:
             db.log("publish", f"{plat} (cuenta {acc}) falló: {e}", "warn", vid, ch["id"])
@@ -394,14 +405,80 @@ def publish_video(vid, ch, data, video_url, thumb_url, manual=False, vtype="shor
     return False
 
 def autopilot():
-    """Encola un video por cada canal activo que no tenga trabajo en curso."""
+    """Encola videos según el modo del canal:
+       - Modo simple (autonomous=false, default): 1 video en curso por vez, como antes.
+       - Modo AUTÓNOMO (autonomous=true): sostiene una cola suficiente para cumplir el
+         ritmo configurado (videos_per_period cada period_days) de forma autoregulada,
+         sin depender de que un humano dispare nada."""
     for ch in db.get_active_channels():
+        if ch.get("autonomous"):
+            _autopilot_paced(ch)
+            continue
         if db.channel_has_open_video(ch["id"]):
             continue
         fmt = ch.get("format") or "both"
         vtype = "long" if fmt == "long" else "short"  # 'both' arranca por short
         db.enqueue_video(ch["id"], vtype)
         db.log("autopilot", f"Encolado {vtype} para '{ch['name']}'", cid=ch["id"])
+
+def _autopilot_paced(ch):
+    """Canal autónomo: calcula cuántos videos hacen falta en la cola (pendientes o ya
+    listos, sin publicar todavía) para sostener el ritmo configurado, con un colchón de
+    unos días — nunca genera de más ni se queda corto."""
+    per = max(1, ch.get("videos_per_period") or 3)
+    days = max(1, ch.get("period_days") or 7)
+    rate_per_day = per / days
+    buffer_days = 3
+    target_queue = max(1, math.ceil(rate_per_day * buffer_days))
+    open_count = db.count_open_videos(ch["id"])
+    if open_count >= target_queue:
+        return
+    fmt = ch.get("format") or "both"
+    made = 0
+    max_per_run = 5  # tope de seguridad: nunca encolar de una un montón por un cálculo raro
+    while open_count + made < target_queue and made < max_per_run:
+        if fmt == "both":
+            vtype = "long" if (open_count + made) % 3 == 2 else "short"
+        else:
+            vtype = "long" if fmt == "long" else "short"
+        db.enqueue_video(ch["id"], vtype)
+        made += 1
+    if made:
+        db.log("autopilot",
+               f"Canal autónomo '{ch['name']}': encolados {made} video(s) para sostener "
+               f"{per}/{days}d (~{rate_per_day:.2f}/día, colchón {buffer_days}d)", cid=ch["id"])
+
+def run_scheduled_publishing():
+    """Para canales autónomos con auto-publicar activo: en vez de publicar apenas
+    termina de renderizarse (lo cual tira todo junto si se generaron varios seguidos),
+    publica el próximo video 'listo' cuando corresponde según el ritmo configurado."""
+    for ch in db.get_active_channels():
+        if not ch.get("autonomous") or not ch.get("publish_enabled"):
+            continue
+        per = max(1, ch.get("videos_per_period") or 3)
+        days = max(1, ch.get("period_days") or 7)
+        interval_h = 24.0 * days / per
+        last = ch.get("last_auto_published_at")
+        due = True
+        if last:
+            try:
+                last_dt = datetime.fromisoformat(str(last).replace("Z", "+00:00"))
+                due = (datetime.now(timezone.utc) - last_dt).total_seconds() / 3600.0 >= interval_h
+            except Exception:
+                due = True
+        if not due:
+            continue
+        ready = db.get_ready_videos(ch["id"], limit=1)
+        if not ready:
+            continue
+        v = ready[0]
+        data = {"title": v.get("title"), "description": v.get("description") or ""}
+        ok = publish_video(v["id"], ch, data, v.get("video_url"), v.get("thumbnail_url"),
+                           manual=True, vtype=v.get("type", "short"))
+        if ok:
+            db.update_channel(ch["id"], last_auto_published_at=datetime.now(timezone.utc).isoformat())
+            db.log("publish", f"Publicación programada (ritmo {per}/{days}d, cada ~{interval_h:.1f}h)",
+                   vid=v["id"], cid=ch["id"])
 
 def refresh_global_trends():
     """Refresca las tendencias globales por rubro (para la vista del dashboard)."""
@@ -422,6 +499,10 @@ def main():
             autopilot()
         except Exception as e:
             db.log("autopilot", f"Error: {e}", "error")
+        try:
+            run_scheduled_publishing()
+        except Exception as e:
+            db.log("publish", f"Error en publicación programada: {e}", "error")
         refresh_global_trends()
 
     pend = db.get_pending_videos(MAX_VIDEOS)
