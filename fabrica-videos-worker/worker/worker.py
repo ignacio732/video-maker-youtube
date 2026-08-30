@@ -332,7 +332,7 @@ def process_video(v):
                 except Exception:
                     bg_img = None
             render.make_thumbnail(data.get("thumbnail_text") or data["title"], theme, thumb,
-                                  accent=ch.get("accent_color"), bg_image=bg_img)
+                                  accent=ch.get("accent_color"), bg_image=bg_img, vtype=vtype)
             thumb_url = db.upload_media(thumb, f"{ch.get('slug','canal')}/{vid}.png", "image/png")
             style = "ai_image" if (bg_img and "img_" in os.path.basename(bg_img)) else ("frame" if bg_img else "gradient")
             db.update_video(vid, thumbnail_url=thumb_url, thumbnail_style=style)
