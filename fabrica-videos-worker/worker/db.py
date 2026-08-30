@@ -166,3 +166,55 @@ def log(step, message, level="info", vid=None, cid=None):
     except Exception as e:
         print("log falló:", e)
     print(f"[{level}] {step}: {message}")
+
+# ---- Análisis de selección de material visual (para aprender qué tipo de visual
+#      convierte mejor, no solo qué tema/formato) ----
+_HUMAN_HINTS = ("woman","man","person","people","hand","hands","couple","girl","boy",
+                "face","child","baby","doctor","patient","holding","sitting","talking","smiling")
+
+def add_segment_visuals(vid, segs, visual_list):
+    """Registra QUÉ se eligió mostrar en cada segmento (no solo qué se buscó), para
+    poder correlacionar después con el desempeño real del video (views/likes/comments).
+    Ej: confirmar si un gancho con escena humana concreta rinde mejor que un diagrama."""
+    rows = []
+    for i, seg in enumerate(segs):
+        vis = visual_list[i] if visual_list and i < len(visual_list) else {}
+        kws = seg.get("keywords") or []
+        text = " ".join(kws).lower()
+        rows.append({
+            "video_id": vid, "idx": i, "segment_text": seg.get("text"),
+            "keywords": kws, "chosen_type": vis.get("type"),
+            "chosen_source": vis.get("source"), "chosen_ref": vis.get("ref"),
+            "is_human_scene": any(h in text for h in _HUMAN_HINTS),
+        })
+    if rows:
+        try:
+            _post("segment_visuals", rows)
+        except Exception as e:
+            print("add_segment_visuals falló:", e)
+
+def get_visual_learnings(cid, min_sample=3):
+    """¿El gancho (segmento 0) con escena humana concreta rinde mejor que uno abstracto/
+    diagrama en este canal? Compara el promedio de vistas de ambos grupos. Devuelve None
+    si no hay muestra suficiente todavía para decir algo con sentido."""
+    videos = _get("videos", {"channel_id": f"eq.{cid}", "select": "id"})
+    ids = {v["id"] for v in videos}
+    if not ids:
+        return None
+    hooks = _get("segment_visuals", {"idx": "eq.0", "select": "video_id,is_human_scene"})
+    hooks = {h["video_id"]: h["is_human_scene"] for h in hooks if h["video_id"] in ids}
+    metrics = _get("video_metrics", {"select": "video_id,views,fetched_at", "order": "fetched_at.desc"})
+    latest = {}
+    for m in metrics:
+        if m["video_id"] not in latest:
+            latest[m["video_id"]] = m["views"] or 0
+    human_views = [latest[vid] for vid, is_human in hooks.items() if is_human and vid in latest]
+    other_views = [latest[vid] for vid, is_human in hooks.items() if not is_human and vid in latest]
+    if len(human_views) < min_sample or len(other_views) < min_sample:
+        return None  # todavía no hay muestra suficiente para sacar una conclusión seria
+    return {
+        "human_scene_avg_views": sum(human_views) / len(human_views), "human_scene_n": len(human_views),
+        "other_avg_views": sum(other_views) / len(other_views), "other_n": len(other_views),
+    }
+
+
