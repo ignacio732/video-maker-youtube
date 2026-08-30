@@ -37,6 +37,9 @@ def get_channel(cid):
     rows = _get("channels", {"id": f"eq.{cid}", "select": "*"})
     return rows[0] if rows else None
 
+def update_channel(cid, **fields):
+    return _patch("channels", {"id": f"eq.{cid}"}, fields)
+
 # ---- Videos ----
 def get_pending_videos(limit=3):
     return _get("videos", {"status": "eq.pending", "select": "*",
@@ -47,6 +50,46 @@ def channel_has_open_video(cid):
                            "status": "in.(pending,scripting,voicing,sourcing,rendering,ready,publishing)",
                            "select": "id", "limit": "1"})
     return len(rows) > 0
+
+def count_open_videos(cid):
+    rows = _get("videos", {"channel_id": f"eq.{cid}",
+                           "status": "in.(pending,scripting,voicing,sourcing,rendering,ready,publishing)",
+                           "select": "id"})
+    return len(rows)
+
+def get_ready_videos(cid, limit=1):
+    return _get("videos", {"channel_id": f"eq.{cid}", "status": "eq.ready",
+                           "select": "*", "order": "created_at.asc", "limit": str(limit)})
+
+def get_recent_titles(cid, limit=40):
+    """Memoria de contenido: títulos ya usados en el canal (cualquier estado), para
+    que el LLM no repita tema. No incluye el guion completo, solo el título."""
+    rows = _get("videos", {"channel_id": f"eq.{cid}", "select": "title",
+                           "order": "created_at.desc", "limit": str(limit)})
+    return [r["title"] for r in rows if r.get("title")]
+
+def get_top_performers(cid, limit=3, min_views=1):
+    """Los videos con mejor desempeño del canal hasta ahora (por vistas más recientes
+    registradas en video_metrics), para que el próximo guion aprenda del formato/ángulo
+    que mejor funcionó. Devuelve [] si todavía no hay datos suficientes."""
+    rows = _get("video_metrics", {
+        "select": "video_id,views,likes,comments,fetched_at,videos(title,type,thumbnail_style)",
+        "order": "fetched_at.desc", "limit": "500"})
+    latest = {}
+    for r in rows:
+        vid = r["video_id"]
+        if vid not in latest:
+            latest[vid] = r
+    ranked = sorted(latest.values(), key=lambda r: r.get("views") or 0, reverse=True)
+    out = []
+    for r in ranked:
+        v = r.get("videos") or {}
+        if not v or (r.get("views") or 0) < min_views:
+            continue
+        out.append({"title": v.get("title"), "type": v.get("type"),
+                    "thumbnail_style": v.get("thumbnail_style"),
+                    "views": r.get("views"), "likes": r.get("likes"), "comments": r.get("comments")})
+    return out[:limit]
 
 def enqueue_video(cid, vtype, title=None):
     return _post("videos", {"channel_id": cid, "type": vtype,
