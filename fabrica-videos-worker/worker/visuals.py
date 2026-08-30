@@ -210,7 +210,7 @@ def choose_visual(seg, subject, outdir, idx, w, h, orientation, min_dur, used_id
             try:
                 path = _download(link, outdir, f"clip_{idx}.mp4")
                 used_ids.add(best.get("id"))
-                return {"type": "video", "path": path}
+                return {"type": "video", "path": path, "source": "pexels", "ref": str(best.get("id"))}
             except Exception:
                 pass
 
@@ -234,7 +234,7 @@ def choose_visual(seg, subject, outdir, idx, w, h, orientation, min_dur, used_id
             try:
                 path = _download(url, outdir, f"img_{idx}.jpg")
                 used_ids.add(best_p.get("id"))
-                return {"type": "image", "path": path}
+                return {"type": "image", "path": path, "source": "pexels", "ref": str(best_p.get("id"))}
             except Exception:
                 pass
 
