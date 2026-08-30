@@ -138,6 +138,18 @@ def process_video(v):
             except Exception as e:
                 db.log("script", f"No se pudieron generar keywords para el guion propio: {e}",
                        "warn", vid, ch["id"])
+            # Un guion propio tampoco trae descripción/tags/hashtags de YouTube — antes
+            # quedaba la descripción vacía (sin SEO/GEO, sin hashtag de marca). Se genera
+            # con el LLM a partir de la narración real, sin tocar el guion en sí.
+            try:
+                meta = llm.metadata_for_own_script(narracion, ch, title=v.get("title") or title)
+                data["title"] = meta.get("title") or data["title"]
+                data["description"] = meta.get("description") or data["description"]
+                data["tags"] = meta.get("tags") or data["tags"]
+                data["hashtags"] = meta.get("hashtags") or data["hashtags"]
+            except Exception as e:
+                db.log("script", f"No se pudo generar descripción/SEO para el guion propio: {e}",
+                       "warn", vid, ch["id"])
             db.log("script", "Usando guion propio del usuario"
                    + (" (con plano y edición separado)" if shot_list else ""),
                    vid=vid, cid=ch["id"])
