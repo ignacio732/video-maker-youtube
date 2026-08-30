@@ -62,24 +62,35 @@ def publish(api_key, platform, account_id, video_url, title, description,
     """
     Publica un video en una plataforma (youtube/tiktok/instagram/facebook) vía Blotato.
     Devuelve el JSON de respuesta. Lanza excepción si falla.
+
+    YouTube exige el canal verificado por teléfono para aceptar thumbnailUrl por API:
+    si Blotato rechaza por eso, se reintenta UNA vez sin miniatura personalizada en vez
+    de perder la publicación entera (YouTube pone una miniatura automática).
     """
-    target = _target(platform, title, privacy, thumbnail_url, ai_generated, page_id=account_id)
-    body = {"post": {
-        "accountId": str(account_id),
-        "content": {
-            "text": description or title or "",
-            "mediaUrls": [video_url],
-            "platform": platform,
-        },
-        "target": target,
-    }}
-    r = requests.post(f"{BASE}/posts", headers=_headers(api_key), json=body, timeout=120)
+    def _post(thumb):
+        target = _target(platform, title, privacy, thumb, ai_generated, page_id=account_id)
+        body = {"post": {
+            "accountId": str(account_id),
+            "content": {"text": description or title or "", "mediaUrls": [video_url], "platform": platform},
+            "target": target,
+        }}
+        return requests.post(f"{BASE}/posts", headers=_headers(api_key), json=body, timeout=120)
+
+    r = _post(thumbnail_url)
+    thumb_blocked = (platform == "youtube" and r.status_code >= 400
+                     and "thumbnail" in r.text.lower()
+                     and ("verified" in r.text.lower() or "verificad" in r.text.lower()))
+    if thumb_blocked:
+        r = _post(None)
     if r.status_code >= 400:
         raise RuntimeError(f"Blotato {platform} {r.status_code}: {r.text[:400]}")
     try:
-        return r.json()
+        resp = r.json()
     except Exception:
-        return {"raw": r.text}
+        resp = {"raw": r.text}
+    if thumb_blocked:
+        resp["_thumbnail_fallback"] = True
+    return resp
 
 def publish_youtube(api_key, account_id, video_url, title, description,
                     privacy="public", thumbnail_url=None, ai_generated=True, **_):
