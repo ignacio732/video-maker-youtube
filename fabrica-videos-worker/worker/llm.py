@@ -47,7 +47,7 @@ HOOKS = (
     '8) La verdadera razón: "Esta es la razón real por la que X."'
 )
 
-def _prompt(channel, vtype, seed_title, trends, recent_titles=None, top_performers=None):
+def _prompt(channel, vtype, seed_title, trends, recent_titles=None, top_performers=None, visual_learning=None):
     if vtype == "short":
         dur = "18 a 28 segundos"
         seg_hint = ("6 a 8 segmentos. Cada 'text' = UNA frase corta (8-12 palabras). "
@@ -84,6 +84,18 @@ def _prompt(channel, vtype, seed_title, trends, recent_titles=None, top_performe
                        "canal (ordenados por desempeño real). Fijate qué formato/ángulo/estructura de "
                        "hook tienen en común y aplicá ese patrón al nuevo video (el TEMA tiene que ser "
                        "distinto igual, por la memoria de contenido de arriba):\n" + "\n".join(lines) + "\n")
+    visual_learn_block = ""
+    if visual_learning:
+        h_avg, o_avg = visual_learning["human_scene_avg_views"], visual_learning["other_avg_views"]
+        if h_avg > o_avg * 1.3:  # solo lo menciona si la diferencia es real, no ruido
+            visual_learn_block = (
+                f"\nAPRENDIZAJE VISUAL — en este canal, los videos cuyo GANCHO (segmento 1) mostraba una "
+                f"escena humana concreta (una persona haciendo algo puntual y relatable) promediaron "
+                f"{h_avg:.0f} vistas, contra {o_avg:.0f} de los que abrieron con un diagrama o imagen "
+                f"abstracta (muestra: {visual_learning['human_scene_n']} vs {visual_learning['other_n']} "
+                f"videos). Para el segmento 1 de este video, las keywords deberían describir una escena "
+                f"humana concreta y relatable en vez de un diagrama, salvo que el tema realmente no lo "
+                f"permita.\n")
     return f"""Canal: {channel['name']}
 Nicho: {channel['niche']}
 Tono: {channel.get('tone') or 'informativo'}
@@ -95,7 +107,7 @@ Formato del video: {vtype} — duración objetivo {dur}.
 IDENTIDAD DEL CANAL (mantené COHERENCIA con todos sus videos): mismo tono y estilo de voz
 en cada video; el CTA final invita a seguir el canal "{channel['name']}" para más de
 {channel['niche']} y encadena con el gancho (loop). {brand_line}
-{seed}{trend_block}{memory_block}{learn_block}
+{seed}{trend_block}{memory_block}{learn_block}{visual_learn_block}
 Plantillas de gancho probadas (elegí/adaptá la mejor): {HOOKS}
 
 Reglas de retención: gancho en los primeros 2 segundos; abrí un open loop y pagalo al final;
@@ -202,10 +214,12 @@ def visuals_for_own_script(texts, niche=""):
         kws = kws + [[] for _ in range(len(texts) - len(kws))]
     return {"visual_subject": (data.get("visual_subject") or "").strip(), "keywords": kws[:len(texts)]}
 
-def generate(channel, vtype="short", seed_title=None, trends=None, recent_titles=None, top_performers=None):
+def generate(channel, vtype="short", seed_title=None, trends=None, recent_titles=None,
+            top_performers=None, visual_learning=None):
     """Devuelve dict con title, hook, description, tags, hashtags, thumbnail_text, format, segments."""
     messages = [{"role": "system", "content": SYSTEM},
-                {"role": "user", "content": _prompt(channel, vtype, seed_title, trends, recent_titles, top_performers)}]
+                {"role": "user", "content": _prompt(channel, vtype, seed_title, trends, recent_titles,
+                                                    top_performers, visual_learning)}]
     raw = _gemini(messages) if PROVIDER == "gemini" else _groq(messages)
     data = _extract_json(raw)
     data.setdefault("tags", [])
