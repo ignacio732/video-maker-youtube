@@ -4,6 +4,7 @@ Incorpora el playbook de virality 2026: hook en 2s, estructura de retención,
 títulos-pregunta <=60 chars, ~160 wpm, CTA con loop, SEO/GEO y formatos ganadores.
 """
 import os, json, re, requests
+import trends as _trends
 
 PROVIDER = os.environ.get("LLM_PROVIDER", "groq").lower()
 GROQ_MODEL = os.environ.get("GROQ_MODEL", "openai/gpt-oss-120b")
@@ -66,6 +67,17 @@ def _prompt(channel, vtype, seed_title, trends, recent_titles=None, top_performe
     brand = (channel.get("brand_hashtag") or "").strip()
     brand_line = (f'Hashtag de MARCA (incluilo SIEMPRE, igual en todos los videos del canal): #{brand}.\n'
                   if brand else "")
+    targets = _trends.channel_target_countries(channel)
+    country_line = (
+        f"PAÍS: este canal apunta específicamente a {', '.join(t.title() for t in targets)}; "
+        "está bien mencionar datos o instituciones locales de ese país.\n"
+        if targets else
+        "AUDIENCIA GLOBAL: este canal es para TODO hispanohablante sin importar su país (LATAM, "
+        "España, EE.UU. hispano). NUNCA menciones un país específico en cifras, instituciones, "
+        "sistemas de salud/educación ni ejemplos ('en Argentina...', 'en México...') salvo que "
+        "el TEMA PEDIDO de abajo ya lo indique explícitamente — generalizá o hablá en términos "
+        "universales.\n"
+    )
     memory_block = ""
     if recent_titles:
         lst = "\n".join(f"- {t}" for t in recent_titles[:40])
@@ -107,7 +119,7 @@ Formato del video: {vtype} — duración objetivo {dur}.
 IDENTIDAD DEL CANAL (mantené COHERENCIA con todos sus videos): mismo tono y estilo de voz
 en cada video; el CTA final invita a seguir el canal "{channel['name']}" para más de
 {channel['niche']} y encadena con el gancho (loop). {brand_line}
-{seed}{trend_block}{memory_block}{learn_block}{visual_learn_block}
+{country_line}{seed}{trend_block}{memory_block}{learn_block}{visual_learn_block}
 Plantillas de gancho probadas (elegí/adaptá la mejor): {HOOKS}
 
 Reglas de retención: gancho en los primeros 2 segundos; abrí un open loop y pagalo al final;
