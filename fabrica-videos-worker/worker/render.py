@@ -123,16 +123,51 @@ def _hex_rgb(s, default=(255, 61, 87)):
     except Exception:
         return default
 
-def make_thumbnail(text, theme, out_png, w=1280, h=720, accent=None, bg_image=None):
+def _pop_color(rgb):
+    """Si el color de acento es muy oscuro, usar una versión más clara como color de
+    texto: un azul tinta oscuro se pierde sobre una foto oscura, necesita contraste."""
+    r, g, b = rgb
+    luma = 0.299 * r + 0.587 * g + 0.114 * b
+    if luma < 130:
+        boost = 130 - luma
+        return tuple(min(255, int(c + boost)) for c in rgb)
+    return rgb
+
+def _draw_accent_graphic(d, w, h, acc, region):
+    """Elemento gráfico sutil (puntos conectados por una línea, tipo 'progreso' o
+    'ciclo') en el color de marca del canal, para acercar la miniatura autogenerada
+    al estilo de una miniatura diseñada a mano en vez de solo texto sobre foto."""
+    x0, y0, x1, y1 = region
+    n = 5
+    pts = []
+    for i in range(n):
+        t = i / (n - 1)
+        x = x0 + t * (x1 - x0)
+        y = y0 + (y1 - y0) * (0.5 + 0.35 * math.sin(t * math.pi * 1.3))
+        pts.append((x, y))
+    glow = tuple(min(255, c + 40) for c in acc)
+    for i in range(len(pts) - 1):
+        d.line([pts[i], pts[i + 1]], fill=glow, width=3)
+    for i, (x, y) in enumerate(pts):
+        r = 10 if i in (0, len(pts) - 1) else 6
+        fill = acc if i != len(pts) // 2 else (255, 255, 255)
+        d.ellipse([x - r, y - r, x + r, y + r], fill=fill, outline=(255, 255, 255), width=2)
+
+def make_thumbnail(text, theme, out_png, w=None, h=None, accent=None, bg_image=None, vtype="short"):
     """
-    Miniatura 1280x720 COHERENTE con el canal: fondo con una imagen del propio video
-    (misma estética) o gradiente temático, + barra y palabra clave en el color de acento
-    del canal + texto grande con contorno.
+    Miniatura COHERENTE con el canal: vertical (1080x1920) para shorts, horizontal
+    (1280x720) para videos largos — antes siempre salía horizontal, incluso para
+    shorts, que se ven mal así en la app de YouTube. Fondo con una imagen del propio
+    video + scrim para legibilidad, texto en dos líneas (segunda línea en el color de
+    acento del canal, como una miniatura diseñada a mano) y un elemento gráfico sutil
+    de puntos conectados en el color de marca.
     """
     from PIL import ImageDraw, ImageFont, ImageFilter
+    if w is None or h is None:
+        w, h = (1080, 1920) if vtype == "short" else (1280, 720)
     acc = _hex_rgb(accent)
     if bg_image and os.path.exists(bg_image):
-        # Usar una imagen del video como fondo (recorte 16:9 + oscurecido para legibilidad)
+        # Usar una imagen del video como fondo (recorte + oscurecido para legibilidad)
         try:
             im = Image.open(bg_image).convert("RGB")
             sw, sh = im.size
@@ -140,29 +175,31 @@ def make_thumbnail(text, theme, out_png, w=1280, h=720, accent=None, bg_image=No
             im = im.resize((int(sw * scale), int(sh * scale)))
             left = (im.size[0] - w) // 2; top = (im.size[1] - h) // 2
             im = im.crop((left, top, left + w, top + h))
-            # scrim oscuro (degradado desde abajo) para que el texto resalte
+            # scrim oscuro doble: fuerte arriba (donde va el texto) y abajo (créditos/UI
+            # de YouTube), transparente en el medio para que la foto respire
             dark = Image.new("RGB", (w, h), (0, 0, 0))
             mask = Image.new("L", (w, h), 0)
             md = ImageDraw.Draw(mask)
-            for y in range(h):
-                md.line([(0, y), (w, y)], fill=int(60 + 150 * (y / h)))
+            top_band, bot_band = int(h * 0.46), int(h * 0.20)
+            for y in range(top_band):
+                md.line([(0, y), (w, y)], fill=int(215 * (1 - y / top_band) ** 1.4))
+            for y in range(h - bot_band, h):
+                yy = y - (h - bot_band)
+                md.line([(0, y), (w, y)], fill=int(140 * (yy / bot_band)))
             img = Image.composite(dark, im, mask)
-            bg = None
         except Exception:
-            img = Image.open(make_gradient_bg(theme, out_png + ".bg.png", w, h)).convert("RGB"); bg = out_png + ".bg.png"
+            img = Image.open(make_gradient_bg(theme, out_png + ".bg.png", w, h)).convert("RGB")
     else:
         bg = make_gradient_bg(theme, out_png + ".bg.png", w, h)
         img = Image.open(bg).convert("RGB")
     d = ImageDraw.Draw(img)
     # barra de acento (color del canal)
-    d.rectangle([0, 0, int(w * 0.02), h], fill=acc)
+    d.rectangle([0, 0, int(w * 0.018), h], fill=acc)
+
     words = (text or "").upper().split()
-    max_w = w * 0.90  # nunca ocupar todo el ancho: margen real a los costados
+    max_w = w * 0.84
 
     def _wrap(font):
-        """Arma líneas midiendo el ANCHO REAL en píxeles (no cantidad de caracteres),
-        para que el texto nunca se corte fuera del cuadro (bug real que se vio en
-        producción: 'NO ES SOLO EL DÍA 14' se cortaba a la derecha)."""
         lines, cur = [], ""
         for wd in words:
             trial = (cur + " " + wd).strip()
@@ -174,15 +211,13 @@ def make_thumbnail(text, theme, out_png, w=1280, h=720, accent=None, bg_image=No
             lines.append(cur)
         return lines
 
-    # Elegir el tamaño de fuente más grande que, tras el ajuste por ancho real,
-    # entre en 3 líneas o menos Y en el alto disponible.
-    fs = int(h * 0.20)
+    fs = int(h * (0.11 if vtype == "short" else 0.17))
     try:
         font = ImageFont.truetype(FONT, fs)
     except Exception:
         font = ImageFont.load_default()
     lines = _wrap(font)
-    while (len(lines) > 3 or len(lines) * fs * 1.15 > h * 0.85) and fs > int(h * 0.08):
+    while (len(lines) > 3 or len(lines) * fs * 1.2 > h * 0.32) and fs > int(h * 0.05):
         fs = int(fs * 0.9)
         try:
             font = ImageFont.truetype(FONT, fs)
@@ -190,24 +225,31 @@ def make_thumbnail(text, theme, out_png, w=1280, h=720, accent=None, bg_image=No
             break
         lines = _wrap(font)
     lines = lines[:3]
+
+    # Colores por línea: alternar blanco / acento, como una miniatura diseñada a mano
+    # (ej. "¿NEGATIVO..." blanco, "O MUY PRONTO?" en el color de marca)
+    line_colors = [(255, 255, 255) if i % 2 == 0 else _pop_color(acc) for i in range(len(lines))]
+    top_margin = h * 0.06
     total_h = len(lines) * fs * 1.15
-    y = (h - total_h) / 2
-    for ln in lines:
+    y = top_margin
+    for ln, col in zip(lines, line_colors):
         bb = d.textbbox((0, 0), ln, font=font)
         tw = bb[2] - bb[0]
         x = (w - tw) / 2
-        # contorno
         for dx in (-4, 0, 4):
             for dy in (-4, 0, 4):
                 d.text((x + dx, y + dy), ln, font=font, fill=(0, 0, 0))
-        d.text((x, y), ln, font=font, fill=(255, 255, 255))
+        d.text((x, y), ln, font=font, fill=col)
         y += fs * 1.15
-    img.save(out_png, "PNG")
+
+    # Elemento gráfico de marca (puntos conectados) entre el texto y la foto
+    graphic_region = (w * 0.22, y + h * 0.02, w * 0.78, y + h * 0.09)
     try:
-        os.remove(bg)
+        _draw_accent_graphic(d, w, h, acc, graphic_region)
     except Exception:
         pass
-    return out_png
+
+    img.save(out_png, "PNG")
 
 # ------------------------------------------------------------------- FONDOS
 _THEMES = {
