@@ -197,10 +197,44 @@ def _channel_categories(channel):
     # si no matchea ninguno, usar un set evergreen amplio
     return cats or ["curiosidades", "ciencia", "salud", "tecnologia", "mente"]
 
+# Países hispanohablantes: si una tendencia menciona uno explícitamente, es demasiado
+# local para un canal de audiencia global (LATAM+España+EE.UU. hispano parejo). Se
+# descarta salvo que el propio canal indique ese país como su mercado/audiencia.
+_COUNTRY_GL = {
+    "argentina": "AR", "méxico": "MX", "mexico": "MX", "españa": "ES", "colombia": "CO",
+    "chile": "CL", "perú": "PE", "peru": "PE", "venezuela": "VE", "ecuador": "EC",
+    "bolivia": "BO", "uruguay": "UY", "paraguay": "PY", "cuba": "CU",
+    "república dominicana": "DO", "republica dominicana": "DO", "guatemala": "GT",
+    "honduras": "HN", "el salvador": "SV", "nicaragua": "NI", "costa rica": "CR",
+    "panamá": "PA", "panama": "PA",
+}
+_COUNTRIES = list(_COUNTRY_GL.keys())
+
+def _mentions_country(text):
+    t = (text or "").lower()
+    return next((c for c in _COUNTRIES if c in t), None)
+
+# Si la audiencia se describe con estos términos, es multi-región/global aunque
+# nombre un país de pasada (ej. "Latinoamérica, España y EE.UU." no apunta a España).
+_GLOBAL_SIGNALS = ("latinoamérica", "latinoamerica", "latam", "ee.uu", "eeuu",
+                    "estados unidos", "global", "hispanohablante", "hispanoparlante")
+
+def channel_target_countries(channel):
+    """Países que el canal indica explícitamente como su mercado (audiencia/nicho).
+    Si no menciona ninguno, si menciona 2+, o si hay señales de audiencia multi-región
+    (ej. 'LATAM, España y EE.UU.'), se asume audiencia global hispanohablante pareja."""
+    blob = f"{channel.get('target_audience','')} {channel.get('niche','')}".lower()
+    if any(s in blob for s in _GLOBAL_SIGNALS):
+        return []
+    found = [c for c in _COUNTRIES if c in blob]
+    return found if len(found) == 1 else []
+
 def for_channel(channel, max_topics=8):
     """Temas candidatos para un canal (rubros afines, sin política/economía)."""
     cats = _channel_categories(channel)
-    gl = "AR"; hl = "es-419"
+    targets = channel_target_countries(channel)
+    gl = _COUNTRY_GL[targets[0]] if targets else "US"  # sin país propio -> edición US
+    hl = "es-419"                                        # (más pan-regional, sin sesgo local)
     lang = channel.get("language", "es")
     items = discover(cats, hl, gl, per_cat=4)
     # además, novedad general filtrada por rubro
@@ -209,6 +243,9 @@ def for_channel(channel, max_topics=8):
         if c and c in cats and not _political(t):
             items.append({"topic": t, "source": "wikipedia", "category": c, "metric": 1})
     items = [x for x in items if not _political(x["topic"])]
+    if not targets:
+        # canal sin país propio declarado -> nunca sugerir tendencias atadas a un país puntual
+        items = [x for x in items if not _mentions_country(x["topic"])]
     items = _dedupe(items)
     return items[:max_topics]
 
