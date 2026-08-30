@@ -47,7 +47,7 @@ HOOKS = (
     '8) La verdadera razón: "Esta es la razón real por la que X."'
 )
 
-def _prompt(channel, vtype, seed_title, trends):
+def _prompt(channel, vtype, seed_title, trends, recent_titles=None, top_performers=None):
     if vtype == "short":
         dur = "18 a 28 segundos"
         seg_hint = ("6 a 8 segmentos. Cada 'text' = UNA frase corta (8-12 palabras). "
@@ -66,6 +66,24 @@ def _prompt(channel, vtype, seed_title, trends):
     brand = (channel.get("brand_hashtag") or "").strip()
     brand_line = (f'Hashtag de MARCA (incluilo SIEMPRE, igual en todos los videos del canal): #{brand}.\n'
                   if brand else "")
+    memory_block = ""
+    if recent_titles:
+        lst = "\n".join(f"- {t}" for t in recent_titles[:40])
+        memory_block = ("\nMEMORIA DE CONTENIDO — temas YA tratados en este canal, NO elijas ninguno de "
+                        "estos ni un ángulo casi idéntico (elegí un tema o ángulo distinto dentro del "
+                        f"nicho):\n{lst}\n")
+    learn_block = ""
+    if top_performers:
+        lines = []
+        for p in top_performers:
+            m = f"{p.get('views') or 0} vistas"
+            if p.get("likes"): m += f", {p['likes']} likes"
+            if p.get("comments"): m += f", {p['comments']} comentarios"
+            lines.append(f"- \"{p.get('title')}\" ({p.get('type')}) — {m}")
+        learn_block = ("\nAPRENDIZAJE — estos son los videos que MEJOR funcionaron hasta ahora en este "
+                       "canal (ordenados por desempeño real). Fijate qué formato/ángulo/estructura de "
+                       "hook tienen en común y aplicá ese patrón al nuevo video (el TEMA tiene que ser "
+                       "distinto igual, por la memoria de contenido de arriba):\n" + "\n".join(lines) + "\n")
     return f"""Canal: {channel['name']}
 Nicho: {channel['niche']}
 Tono: {channel.get('tone') or 'informativo'}
@@ -77,7 +95,7 @@ Formato del video: {vtype} — duración objetivo {dur}.
 IDENTIDAD DEL CANAL (mantené COHERENCIA con todos sus videos): mismo tono y estilo de voz
 en cada video; el CTA final invita a seguir el canal "{channel['name']}" para más de
 {channel['niche']} y encadena con el gancho (loop). {brand_line}
-{seed}{trend_block}
+{seed}{trend_block}{memory_block}{learn_block}
 Plantillas de gancho probadas (elegí/adaptá la mejor): {HOOKS}
 
 Reglas de retención: gancho en los primeros 2 segundos; abrí un open loop y pagalo al final;
@@ -184,10 +202,10 @@ def visuals_for_own_script(texts, niche=""):
         kws = kws + [[] for _ in range(len(texts) - len(kws))]
     return {"visual_subject": (data.get("visual_subject") or "").strip(), "keywords": kws[:len(texts)]}
 
-def generate(channel, vtype="short", seed_title=None, trends=None):
+def generate(channel, vtype="short", seed_title=None, trends=None, recent_titles=None, top_performers=None):
     """Devuelve dict con title, hook, description, tags, hashtags, thumbnail_text, format, segments."""
     messages = [{"role": "system", "content": SYSTEM},
-                {"role": "user", "content": _prompt(channel, vtype, seed_title, trends)}]
+                {"role": "user", "content": _prompt(channel, vtype, seed_title, trends, recent_titles, top_performers)}]
     raw = _gemini(messages) if PROVIDER == "gemini" else _groq(messages)
     data = _extract_json(raw)
     data.setdefault("tags", [])
