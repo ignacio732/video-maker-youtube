@@ -156,9 +156,11 @@ def process_video(v):
             data = None
             recent_titles = db.get_recent_titles(ch["id"], 40)
             top_performers = db.get_top_performers(ch["id"], 3)
+            visual_learning = db.get_visual_learnings(ch["id"])
             try:
                 data = llm.generate(ch, vtype, seed_title=v.get("title"), trends=trend_topics,
-                                    recent_titles=recent_titles, top_performers=top_performers)
+                                    recent_titles=recent_titles, top_performers=top_performers,
+                                    visual_learning=visual_learning)
             except Exception as e:
                 if trend_topics:
                     # Si falló con tendencias (ej. una tendencia sensible que el LLM rechaza,
@@ -167,7 +169,8 @@ def process_video(v):
                     db.log("script", f"Guion con tendencias falló ({e}); reintentando sin tendencias",
                            "warn", vid, ch["id"])
                     data = llm.generate(ch, vtype, seed_title=v.get("title"), trends=None,
-                                        recent_titles=recent_titles, top_performers=top_performers)
+                                        recent_titles=recent_titles, top_performers=top_performers,
+                                        visual_learning=visual_learning)
                 else:
                     raise
         db.add_script(vid, data["full_text"], data["segments"])
@@ -235,7 +238,9 @@ def process_video(v):
                         ok = 0
                         for k, i in enumerate(need):
                             if gen[k]:
-                                visual_list[i] = {"type": "image", "path": gen[k]}; ok += 1
+                                visual_list[i] = {"type": "image", "path": gen[k],
+                                                  "source": "pollinations", "ref": prompts[k][:80]}
+                                ok += 1
                         db.log("ai", f"{ok}/{len(need)} imágenes IA generadas "
                                      f"(modo {mode}, estilo {ai_style})",
                                vid=vid, cid=ch["id"])
@@ -258,6 +263,8 @@ def process_video(v):
         db.log("visuals",
                f"{len(imgs)} propias | {n_vid} vídeos stock, {n_img} imágenes, {n_grad} gradiente (modo {mode})",
                vid=vid, cid=ch["id"])
+        if not imgs and visual_list:
+            db.add_segment_visuals(vid, segs, visual_list)
 
         # Música: propia del video > default global > MUSIC_PATH
         music = None
