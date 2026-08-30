@@ -142,7 +142,7 @@ def process_video(v):
             # quedaba la descripción vacía (sin SEO/GEO, sin hashtag de marca). Se genera
             # con el LLM a partir de la narración real, sin tocar el guion en sí.
             try:
-                meta = llm.metadata_for_own_script(narracion, ch, title=v.get("title"))
+                meta = llm.metadata_for_own_script(narracion, ch, title=v.get("title"), thumb_text=thumb_text)
                 data["title"] = meta.get("title") or data["title"]
                 data["description"] = meta.get("description") or data["description"]
                 data["tags"] = meta.get("tags") or data["tags"]
