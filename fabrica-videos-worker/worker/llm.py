@@ -193,28 +193,30 @@ def _gemini(messages):
         raise RuntimeError(f"Gemini {r.status_code}: {r.text[:600]}")
     return r.json()["candidates"][0]["content"]["parts"][0]["text"]
 
-def metadata_for_own_script(narracion, channel, title=None):
+def metadata_for_own_script(narracion, channel, title=None, thumb_text=None):
     """
     Un guion propio del usuario no trae título/descripción/tags/hashtags de YouTube
-    (antes quedaba la descripción vacía, sin SEO/GEO ni hashtag de marca). Genera todo
-    eso a partir de la narración YA ESCRITA, sin tocar ni reescribir el guion en sí.
+    (antes quedaba la descripción vacía, sin SEO/GEO ni hashtag de marca; y el título
+    quedaba como el recorte literal de la primera frase del guion). Genera todo eso a
+    partir de la narración YA ESCRITA, sin tocar ni reescribir el guion en sí.
     """
     brand = (channel.get("brand_hashtag") or "").strip()
     title_instr = (f'El título YA está definido, no lo cambies: "{title}"\n' if title else
-                   "Generá un título tipo pregunta o número, máximo 60 caracteres, con la "
-                   "palabra clave principal al inicio.\n")
+                   "Generá también un TÍTULO nuevo tipo pregunta o número (NUNCA la primera "
+                   "frase del guion tal cual), máximo 60 caracteres, con la palabra clave "
+                   "principal al inicio.\n")
     prompt = (
         f"Canal: {channel['name']}\nNicho: {channel['niche']}\nTono: {channel.get('tone') or 'informativo'}\n\n"
         f"Un usuario escribió este guion para un video (contexto, para que sepas de qué habla):\n"
         f"---\n{narracion}\n---\n\n"
         f"{title_instr}"
-        "Tu tarea es escribir una DESCRIPCIÓN DE YOUTUBE NUEVA (2 a 4 frases, NUNCA vacía): "
+        "Además, escribí una DESCRIPCIÓN DE YOUTUBE NUEVA (2 a 4 frases, NUNCA vacía): "
         "la primera frase responde la pregunta/tema central en texto plano (para que la lean bien "
         "IAs como ChatGPT/Perplexity y Google AI Overviews), después 1-2 frases de contexto extra "
         "que NO estén copiadas textualmente del guion, y 2-3 hashtags relevantes al final."
         + (f" Incluí SIEMPRE el hashtag #{brand} (igual en todos los videos del canal)." if brand else "")
-        + '\n\nDevolvé SOLO un JSON con esta forma EXACTA (el campo "description" es OBLIGATORIO '
-        'y no puede ser un string vacío): '
+        + '\n\nDevolvé SOLO un JSON con esta forma EXACTA. LOS CUATRO CAMPOS SON OBLIGATORIOS, '
+        'ninguno puede faltar ni quedar vacío: '
         '{"title": "...", "description": "...", "tags": ["...", "..."], "hashtags": ["...", "..."]}'
     )
     messages = [{"role": "system", "content": "Respondés SIEMPRE en JSON válido, sin texto extra."},
@@ -234,6 +236,15 @@ def metadata_for_own_script(narracion, channel, title=None):
         if brand:
             fallback += f" #{brand}"
         data["description"] = fallback
+    # Salvaguarda igual para el título: si el LLM omitió el campo (pasa seguido con
+    # modelos chicos, aunque el schema lo pida), NUNCA dejar la primera frase del guion
+    # tal cual como título — se usa el texto de miniatura (ya es punchy) si existe.
+    if not title and not (data.get("title") or "").strip():
+        if thumb_text:
+            data["title"] = thumb_text.strip().capitalize()
+        else:
+            hook = (narracion.split(".")[0] or narracion[:60]).strip()
+            data["title"] = (hook[:1].upper() + hook[1:])[:70]
     return data
 
 def visuals_for_own_script(texts, niche=""):
