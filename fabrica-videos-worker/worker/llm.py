@@ -193,6 +193,38 @@ def _gemini(messages):
         raise RuntimeError(f"Gemini {r.status_code}: {r.text[:600]}")
     return r.json()["candidates"][0]["content"]["parts"][0]["text"]
 
+def metadata_for_own_script(narracion, channel, title=None):
+    """
+    Un guion propio del usuario no trae título/descripción/tags/hashtags de YouTube
+    (antes quedaba la descripción vacía, sin SEO/GEO ni hashtag de marca). Genera todo
+    eso a partir de la narración YA ESCRITA, sin tocar ni reescribir el guion en sí.
+    """
+    brand = (channel.get("brand_hashtag") or "").strip()
+    title_instr = (f'El título YA está definido, no lo cambies: "{title}"\n' if title else
+                   "Generá un título tipo pregunta o número, máximo 60 caracteres, con la "
+                   "palabra clave principal al inicio.\n")
+    prompt = (
+        f"Canal: {channel['name']}\nNicho: {channel['niche']}\nTono: {channel.get('tone') or 'informativo'}\n\n"
+        f"Este es un guion YA ESCRITO por el usuario (es solo contexto, NO lo reescribas ni "
+        f"lo resumas en la descripción como si fuera nuevo texto):\n{narracion}\n\n"
+        f"{title_instr}"
+        "Generá una DESCRIPCIÓN de YouTube: la primera frase responde la pregunta/tema central "
+        "en texto plano (para que la lean bien IAs como ChatGPT/Perplexity y Google AI Overviews), "
+        "después 2-3 frases de contexto adicional, y 2-3 hashtags relevantes al final."
+        + (f" Incluí SIEMPRE el hashtag #{brand} (igual en todos los videos del canal)." if brand else "")
+        + '\n\nDevolvé SOLO un JSON con esta forma EXACTA: '
+        '{"title": "...", "description": "...", "tags": ["...", "..."], "hashtags": ["...", "..."]}'
+    )
+    messages = [{"role": "system", "content": "Respondés SIEMPRE en JSON válido, sin texto extra."},
+                {"role": "user", "content": prompt}]
+    raw = _gemini(messages) if PROVIDER == "gemini" else _groq(messages)
+    data = _extract_json(raw)
+    if title:
+        data["title"] = title
+    data.setdefault("tags", [])
+    data.setdefault("hashtags", [])
+    return data
+
 def visuals_for_own_script(texts, niche=""):
     """
     Para un guion PROPIO del usuario (no generado por el LLM): a partir de una lista
