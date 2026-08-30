@@ -217,7 +217,12 @@ def make_thumbnail(text, theme, out_png, w=None, h=None, accent=None, bg_image=N
     except Exception:
         font = ImageFont.load_default()
     lines = _wrap(font)
-    while (len(lines) > 3 or len(lines) * fs * 1.2 > h * 0.32) and fs > int(h * 0.05):
+    # Reducir fuente si hay demasiadas líneas, ocupa mucha altura, O si alguna línea
+    # individual sigue pasándose del ancho (una sola palabra larga sin espacios, tipo
+    # "NEGATIVO...", no se puede partir en el wrap y quedaba cortada por el borde).
+    def _overflows(lines, font):
+        return any(d.textbbox((0, 0), ln, font=font)[2] > max_w for ln in lines)
+    while (len(lines) > 3 or len(lines) * fs * 1.2 > h * 0.32 or _overflows(lines, font)) and fs > int(h * 0.035):
         fs = int(fs * 0.9)
         try:
             font = ImageFont.truetype(FONT, fs)
