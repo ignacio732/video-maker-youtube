@@ -11,33 +11,40 @@ GROQ_MODEL = os.environ.get("GROQ_MODEL", "openai/gpt-oss-120b")
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-1.5-flash")
 
 SYSTEM = (
-    "Sos el mejor guionista de YouTube Shorts virales en español, experto en retención "
-    "y en el algoritmo 2026. Sabés que el 50-60% del abandono ocurre en los primeros 3 "
+    "Sos el mejor guionista de YouTube Shorts virales, experto en retención y en el "
+    "algoritmo 2026. Sabés que el 50-60% del abandono ocurre en los primeros 3 "
     "segundos, que el gancho debe aparecer como TEXTO y VOZ a la vez, que hay que abrir un "
     "'open loop' y pagarlo recién al final, y que el último renglón debe encadenar con el "
     "primero (loop). Escribís frases cortas, ritmo rápido (~160 palabras/min), sin relleno. "
-    "Respondés SIEMPRE en JSON válido."
+    "Respondés SIEMPRE en JSON válido, en el idioma que te indique cada canal."
 )
 
-def _accent_note(voice):
+def _language_note(channel):
     """
-    La variante de español del GUION debe ir acorde al ACENTO de la voz TTS del canal
-    (si no, suena raro: texto rioplatense narrado con acento mexicano, etc). Por defecto,
-    si el canal no tiene una voz configurada explícitamente, se usa neutro global (sirve
-    para audiencia de toda Latinoamérica, España y EE.UU. hispano).
+    Idioma y variante de escritura: antes el sistema escribía SIEMPRE en español sin
+    importar la config del canal (channel['language']). Ahora respeta ese campo — si el
+    canal es en inglés (u otro idioma), escribe en ese idioma; si es español, mantiene
+    la lógica de variante/acento atada a la voz TTS configurada (para que el texto suene
+    coherente con el acento que después lo va a narrar).
     """
-    v = (voice or "").lower()
-    if v.startswith("es-ar") or v.startswith("es-uy"):
+    lang = (channel.get("language") or "es").lower()
+    voice = (channel.get("voice") or "").lower()
+    if lang.startswith("en"):
+        return ("Write in clear, neutral, global English (not UK/AU-specific slang), "
+                "suited for an international English-speaking audience.")
+    if not lang.startswith("es"):
+        return f"Escribí en el idioma '{lang}' (código ISO), de forma neutra y clara."
+    if voice.startswith("es-ar") or voice.startswith("es-uy"):
         return "Escribí en español rioplatense neutro (voseo), sin modismos extremos."
-    if v.startswith("es-mx"):
+    if voice.startswith("es-mx"):
         return "Escribí en español latinoamericano neutro con base mexicana (tuteo), sin modismos locales."
-    if v.startswith("es-es"):
+    if voice.startswith("es-es"):
         return "Escribí en español de España neutro (tuteo o vosotros según corresponda), sin modismos locales."
     return ("Escribí en español NEUTRO GLOBAL (tuteo estándar), apto para audiencia de toda "
             "Latinoamérica, España y público hispano de EE.UU.: sin modismos regionales, "
             "explicando siglas o términos poco comunes la primera vez que aparecen.")
 
-HOOKS = (
+HOOKS_ES = (
     '1) Afirmación audaz/contraintuitiva: "Todo lo que sabés de X es mentira." '
     '2) Curiosity gap: "Hay algo sobre X que nadie te cuenta." '
     '3) Advertencia: "Nunca hagas X sin saber esto." '
@@ -47,6 +54,20 @@ HOOKS = (
     '7) Secreto: "Solo unos pocos conocen esto." '
     '8) La verdadera razón: "Esta es la razón real por la que X."'
 )
+HOOKS_EN = (
+    '1) Bold/counterintuitive claim: "Everything you know about X is wrong." '
+    '2) Curiosity gap: "There\'s something about X nobody tells you." '
+    '3) Warning: "Never do X without knowing this." '
+    '4) Shock fact: "90% of people don\'t know X." '
+    '5) Direct question: "Did you know why X?" '
+    '6) Ranking teaser: "Number 3 will surprise you." '
+    '7) Secret: "Only a few people know this." '
+    '8) The real reason: "This is the real reason why X."'
+)
+
+def _hooks_for(channel):
+    lang = (channel.get("language") or "es").lower()
+    return HOOKS_EN if lang.startswith("en") else HOOKS_ES
 
 def _prompt(channel, vtype, seed_title, trends, recent_titles=None, top_performers=None, visual_learning=None):
     if vtype == "short":
@@ -114,13 +135,13 @@ Tono: {channel.get('tone') or 'informativo'}
 Audiencia: {channel.get('target_audience') or 'general'}
 Formato del video: {vtype} — duración objetivo {dur}.
 
-{_accent_note(channel.get('voice'))}
+{_language_note(channel)}
 
 IDENTIDAD DEL CANAL (mantené COHERENCIA con todos sus videos): mismo tono y estilo de voz
 en cada video; el CTA final invita a seguir el canal "{channel['name']}" para más de
 {channel['niche']} y encadena con el gancho (loop). {brand_line}
 {country_line}{seed}{trend_block}{memory_block}{learn_block}{visual_learn_block}
-Plantillas de gancho probadas (elegí/adaptá la mejor): {HOOKS}
+Plantillas de gancho probadas (elegí/adaptá la mejor): {_hooks_for(channel)}
 
 Reglas de retención: gancho en los primeros 2 segundos; abrí un open loop y pagalo al final;
 frases cortas y ritmo rápido; sin introducciones ni relleno; un cambio/idea nueva cada 5-7s;
