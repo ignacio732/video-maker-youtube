@@ -30,12 +30,13 @@ PRIVACY = os.environ.get("YT_PRIVACY", "public")
 # visuales en vez de inflar el audio con texto de producción.
 _SECTION_PATTERNS = [
     ("hook", r"hook\b[^:\n]*"),
-    ("guion_voz", r"gui[oó]n\s+de\s+voz"),
+    ("guion_voz", r"gui[oó]n\s+de\s+voz|gui[oó]n\s+para\s+la\s+ia"),
     ("plano_edicion", r"plano\s+y\s+edici[oó]n"),
     ("prompt_visual", r"prompt\s+visual[^:\n]*"),
     ("cta", r"cta\b"),
-    ("control_factual", r"control\s+factual[^:\n]*"),
+    ("control_factual", r"control\s+factual[^:\n]*|fuentes[^:\n]*"),
     ("miniatura", r"(?:texto\s+de\s+)?miniatura(?:\s*\/\s*portada)?"),
+    ("descripcion", r"descripci[oó]n(?:\s+para\s+youtube)?"),
 ]
 _SECTION_RE = _re.compile(
     r"(?im)^\s*(" + "|".join(p for _, p in _SECTION_PATTERNS) + r")\s*:\s*"
@@ -48,12 +49,14 @@ def parse_user_script(us):
       - shot_list: la lista de planos ("plano y edición") para anclar los visuales
       - thumb_text: el texto de miniatura/portada, si el usuario lo definió
         explícitamente (si no, el llamador decide un fallback)
-    Si no hay etiquetas reconocidas, devuelve (us, None, None): se narra todo tal
-    cual (guion simple, sin este formato).
+      - descripcion: si el usuario ya escribió una descripción de YouTube completa
+        (con hashtags y todo), se usa tal cual y no se le pide una nueva al LLM
+    Si no hay etiquetas reconocidas, devuelve (us, None, None, None): se narra todo
+    tal cual (guion simple, sin este formato).
     """
     matches = list(_SECTION_RE.finditer(us))
     if not matches:
-        return us.strip(), None, None
+        return us.strip(), None, None, None
     sections = {}
     for i, m in enumerate(matches):
         label = m.group(1).strip().lower()
@@ -65,7 +68,7 @@ def parse_user_script(us):
     narracion = " ".join(sections[k] for k in ("hook", "guion_voz", "cta") if sections.get(k)).strip()
     if not narracion:
         narracion = us.strip()
-    return narracion, sections.get("plano_edicion"), sections.get("miniatura")
+    return narracion, sections.get("plano_edicion"), sections.get("miniatura"), sections.get("descripcion")
 
 THEME_MAP = [
     (("espacio","universo","astronomia","cosmos","planeta"), "space"),
@@ -110,12 +113,12 @@ def process_video(v):
         import llm
         us_raw = (v.get("user_script") or "").strip()
         if us_raw:
-            narracion, shot_list, thumb_text = parse_user_script(us_raw)
+            narracion, shot_list, thumb_text, own_desc = parse_user_script(us_raw)
             title = v.get("title") or narracion.split("\n")[0][:70]
             sents = [s.strip() for s in _re.split(r'(?<=[.!?])\s+', narracion) if s.strip()]
             segments = [{"text": s, "keywords": []} for s in sents] or [{"text": narracion, "keywords": []}]
             data = {"title": title, "hook": sents[0] if sents else title,
-                    "description": "", "tags": [], "hashtags": [],
+                    "description": own_desc or "", "tags": [], "hashtags": [],
                     "thumbnail_text": (thumb_text or title)[:28], "format": "propio",
                     "segments": segments, "full_text": narracion}
             # Un guion propio no trae keywords en inglés como el generado por IA: sin esto,
@@ -140,16 +143,19 @@ def process_video(v):
                        "warn", vid, ch["id"])
             # Un guion propio tampoco trae descripción/tags/hashtags de YouTube — antes
             # quedaba la descripción vacía (sin SEO/GEO, sin hashtag de marca). Se genera
-            # con el LLM a partir de la narración real, sin tocar el guion en sí.
-            try:
-                meta = llm.metadata_for_own_script(narracion, ch, title=v.get("title"), thumb_text=thumb_text)
-                data["title"] = meta.get("title") or data["title"]
-                data["description"] = meta.get("description") or data["description"]
-                data["tags"] = meta.get("tags") or data["tags"]
-                data["hashtags"] = meta.get("hashtags") or data["hashtags"]
-            except Exception as e:
-                db.log("script", f"No se pudo generar descripción/SEO para el guion propio: {e}",
-                       "warn", vid, ch["id"])
+            # con el LLM a partir de la narración real, sin tocar el guion en sí — SALVO
+            # que el usuario ya haya escrito su propia descripción completa (own_desc),
+            # en cuyo caso se respeta tal cual y no se le pide una nueva al LLM.
+            if not own_desc:
+                try:
+                    meta = llm.metadata_for_own_script(narracion, ch, title=v.get("title"), thumb_text=thumb_text)
+                    data["title"] = meta.get("title") or data["title"]
+                    data["description"] = meta.get("description") or data["description"]
+                    data["tags"] = meta.get("tags") or data["tags"]
+                    data["hashtags"] = meta.get("hashtags") or data["hashtags"]
+                except Exception as e:
+                    db.log("script", f"No se pudo generar descripción/SEO para el guion propio: {e}",
+                           "warn", vid, ch["id"])
             db.log("script", "Usando guion propio del usuario"
                    + (" (con plano y edición separado)" if shot_list else ""),
                    vid=vid, cid=ch["id"])
