@@ -75,7 +75,8 @@ def _clean(s):
 
 # -------------------------------------------------------------------- FUENTES
 def google_news(query, hl="es-419", gl="AR", maxn=10):
-    """Titulares de Google News por búsqueda (funciona en runners con internet abierta)."""
+    """Titulares + URL del artículo real de Google News (antes se perdía la URL,
+    y sin URL no se puede investigar de verdad una tendencia puntual)."""
     try:
         url = (f"https://news.google.com/rss/search?q={requests.utils.quote(query)}"
                f"&hl={hl}&gl={gl}&ceid={gl}:{hl.split('-')[0]}")
@@ -84,8 +85,9 @@ def google_news(query, hl="es-419", gl="AR", maxn=10):
         out = []
         for it in root.findall(".//item")[:maxn]:
             title = re.sub(r"\s+-\s+[^-]+$", "", _clean(it.findtext("title")))
+            link = _clean(it.findtext("link"))
             if title:
-                out.append(title)
+                out.append({"title": title, "url": link or None})
         return out
     except Exception:
         return []
@@ -106,12 +108,14 @@ def google_trends(geo="AR", maxn=20):
         return []
 
 def gdelt_news(query, timespan="3d", maxrecords=8):
+    """Igual que antes pero también devuelve la URL real del artículo."""
     try:
         url = ("https://api.gdeltproject.org/api/v2/doc/doc?"
                f"query={requests.utils.quote(query)}&mode=ArtList&maxrecords={maxrecords}"
                f"&timespan={timespan}&format=json&sort=hybridrel")
         arts = requests.get(url, headers=UA, timeout=20).json().get("articles", [])
-        return [_clean(a.get("title")) for a in arts if a.get("title")]
+        return [{"title": _clean(a.get("title")), "url": a.get("url") or None}
+                for a in arts if a.get("title")]
     except Exception:
         return []
 
@@ -156,7 +160,7 @@ def _categorize_free(topic):
 def discover(categories=None, hl="es-419", gl="AR", per_cat=4, include_trends=True, lang="es"):
     """
     Descubre temas por rubro (evergreen/viral). Devuelve lista de
-    {topic, source, category, metric}, ya filtrada de política/economía.
+    {topic, url, source, category, metric}, ya filtrada de política/economía.
     Si el canal es en inglés y la categoría tiene 'gn_en', busca en inglés; si no,
     cae a la query en español (mejor eso que no buscar nada).
     """
@@ -168,16 +172,16 @@ def discover(categories=None, hl="es-419", gl="AR", per_cat=4, include_trends=Tr
         if not cfg:
             continue
         query = (cfg.get("gn_en") if en else None) or cfg["gn"]
-        for t in google_news(query, hl, gl, maxn=per_cat + 2):
-            items.append({"topic": t, "source": "google_news", "category": cat, "metric": 2})
-        for t in gdelt_news(cfg["gdelt"], maxrecords=per_cat)[:per_cat]:
-            items.append({"topic": t, "source": "gdelt", "category": cat, "metric": 1})
+        for it in google_news(query, hl, gl, maxn=per_cat + 2):
+            items.append({"topic": it["title"], "url": it.get("url"), "source": "google_news", "category": cat, "metric": 2})
+        for it in gdelt_news(cfg["gdelt"], maxrecords=per_cat)[:per_cat]:
+            items.append({"topic": it["title"], "url": it.get("url"), "source": "gdelt", "category": cat, "metric": 1})
     # Google Trends (lo que se busca ahora) — solo lo que cae en algún rubro
     if include_trends:
         for t in google_trends(gl):
             c = _categorize_free(t)
             if c and (not categories or c in cats):
-                items.append({"topic": t, "source": "google_trends", "category": c, "metric": 3})
+                items.append({"topic": t, "url": None, "source": "google_trends", "category": c, "metric": 3})
     # Filtrar política/economía y deduplicar
     items = [x for x in items if not _political(x["topic"])]
     items = _dedupe(items)
@@ -247,7 +251,8 @@ def for_channel(channel, max_topics=8):
     for t in wikipedia_hot(lang):
         c = _categorize_free(t)
         if c and c in cats and not _political(t):
-            items.append({"topic": t, "source": "wikipedia", "category": c, "metric": 1})
+            wiki_url = f"https://{lang}.wikipedia.org/wiki/{t.replace(' ', '_')}"
+            items.append({"topic": t, "url": wiki_url, "source": "wikipedia", "category": c, "metric": 1})
     items = [x for x in items if not _political(x["topic"])]
     if not targets:
         # canal sin país propio declarado -> nunca sugerir tendencias atadas a un país puntual
@@ -258,3 +263,31 @@ def for_channel(channel, max_topics=8):
 def discover_global(per_cat=3):
     """Para el dashboard: algunos temas frescos de CADA rubro."""
     return discover(list(CATEGORIES.keys()), per_cat=per_cat)
+
+def fetch_article_text(url, max_chars=4000):
+    """
+    Investiga de verdad una tendencia puntual: baja la página del artículo y extrae
+    el texto legible (párrafos), para que el LLM escriba el guion en base a hechos
+    reales de la noticia, no solo al titular. Devuelve None si no se pudo (paywall,
+    nota muy corta, etc.) — el llamador debe tener un fallback razonable, nunca
+    inventar que "investigó" algo que en realidad no pudo leer.
+    """
+    if not url:
+        return None
+    try:
+        # Google News redirige (news.google.com/rss/articles/...) al medio real
+        r = requests.get(url, headers=UA, timeout=20, allow_redirects=True)
+        if r.status_code >= 400 or not r.text:
+            return None
+        html_text = r.text
+        html_text = re.sub(r"<(script|style|nav|header|footer|aside)[^>]*>.*?</\1>", " ",
+                           html_text, flags=re.DOTALL | re.IGNORECASE)
+        paragraphs = re.findall(r"<p[^>]*>(.*?)</p>", html_text, flags=re.DOTALL | re.IGNORECASE)
+        texts = [html.unescape(re.sub(r"<[^>]+>", " ", p)).strip() for p in paragraphs]
+        texts = [t for t in texts if len(t) > 40]  # descartar migas de pan, leyendas cortas, etc.
+        full = re.sub(r"\s+", " ", "\n".join(texts)).strip()
+        if len(full) < 200:  # muy poco texto real -> probablemente no se pudo leer bien
+            return None
+        return full[:max_chars]
+    except Exception:
+        return None
