@@ -51,6 +51,7 @@ CATEGORIES = {
     "espacio":      {"gn": "espacio OR astronomía OR NASA OR planeta OR telescopio OR eclipse",
                      "gdelt": "space astronomy NASA", "kw": ["espacio","astro","planeta","nasa","eclipse","luna"]},
     "tecnologia":   {"gn": "inteligencia artificial OR robot OR tecnología OR innovación OR gadget",
+                     "gn_en": "artificial intelligence OR robot OR technology OR innovation OR gadget",
                      "gdelt": "artificial intelligence robot technology", "kw": ["tecno","robot","inteligencia artificial","ia ","gadget","app"]},
     "mente":        {"gn": "psicología OR cerebro OR productividad OR hábitos OR memoria",
                      "gdelt": "psychology brain productivity", "kw": ["psico","cerebro","mente","habito","hábito","memoria"]},
@@ -152,18 +153,22 @@ def _categorize_free(topic):
             return cat
     return None
 
-def discover(categories=None, hl="es-419", gl="AR", per_cat=4, include_trends=True):
+def discover(categories=None, hl="es-419", gl="AR", per_cat=4, include_trends=True, lang="es"):
     """
     Descubre temas por rubro (evergreen/viral). Devuelve lista de
     {topic, source, category, metric}, ya filtrada de política/economía.
+    Si el canal es en inglés y la categoría tiene 'gn_en', busca en inglés; si no,
+    cae a la query en español (mejor eso que no buscar nada).
     """
     cats = categories or list(CATEGORIES.keys())
     items = []
+    en = lang.startswith("en")
     for cat in cats:
         cfg = CATEGORIES.get(cat)
         if not cfg:
             continue
-        for t in google_news(cfg["gn"], hl, gl, maxn=per_cat + 2):
+        query = (cfg.get("gn_en") if en else None) or cfg["gn"]
+        for t in google_news(query, hl, gl, maxn=per_cat + 2):
             items.append({"topic": t, "source": "google_news", "category": cat, "metric": 2})
         for t in gdelt_news(cfg["gdelt"], maxrecords=per_cat)[:per_cat]:
             items.append({"topic": t, "source": "gdelt", "category": cat, "metric": 1})
@@ -233,10 +238,11 @@ def for_channel(channel, max_topics=8):
     """Temas candidatos para un canal (rubros afines, sin política/economía)."""
     cats = _channel_categories(channel)
     targets = channel_target_countries(channel)
-    gl = _COUNTRY_GL[targets[0]] if targets else "US"  # sin país propio -> edición US
-    hl = "es-419"                                        # (más pan-regional, sin sesgo local)
     lang = channel.get("language", "es")
-    items = discover(cats, hl, gl, per_cat=4)
+    en = lang.startswith("en")
+    gl = _COUNTRY_GL[targets[0]] if targets else ("US" if en else "US")
+    hl = "en" if en else "es-419"  # antes quedaba "es-419" fijo incluso para canales en inglés
+    items = discover(cats, hl, gl, per_cat=4, lang=lang)
     # además, novedad general filtrada por rubro
     for t in wikipedia_hot(lang):
         c = _categorize_free(t)
