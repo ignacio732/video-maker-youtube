@@ -69,7 +69,8 @@ def _hooks_for(channel):
     lang = (channel.get("language") or "es").lower()
     return HOOKS_EN if lang.startswith("en") else HOOKS_ES
 
-def _prompt(channel, vtype, seed_title, trends, recent_titles=None, top_performers=None, visual_learning=None):
+def _prompt(channel, vtype, seed_title, trends, recent_titles=None, top_performers=None,
+           visual_learning=None, research_context=None):
     if vtype == "short":
         dur = "18 a 28 segundos"
         seg_hint = ("6 a 8 segmentos. Cada 'text' = UNA frase corta (8-12 palabras). "
@@ -80,6 +81,23 @@ def _prompt(channel, vtype, seed_title, trends, recent_titles=None, top_performe
         seg_hint = ("14 a 20 segmentos. Mantené un giro o dato nuevo cada 5-7 segundos. "
                     "Incluí capítulos (chapters) con timestamps aproximados empezando en 0:00.")
     seed = f'TEMA PEDIDO (respetalo): "{seed_title}".\n' if seed_title else ""
+    research_block = ""
+    if research_context:
+        research_block = (
+            "\nINVESTIGACIÓN REAL — esto es un extracto del artículo original sobre el TEMA PEDIDO de "
+            "arriba (no un resumen de terceros, es la fuente primaria). Usalo como base factual del "
+            "guion: los datos, cifras y hechos concretos del guion tienen que salir de ACÁ, no "
+            "inventados. Podés simplificar y elegir qué contar, pero no contradecir lo que dice el "
+            f"extracto:\n---\n{research_context}\n---\n"
+        )
+    elif seed_title:
+        # Se pidió un tema puntual pero no se pudo bajar el artículo real (paywall, etc.):
+        # avisarle al modelo para que sea conservador y no invente cifras específicas.
+        research_block = (
+            "\nOJO: no se pudo acceder al artículo original de este tema puntual — no inventes "
+            "cifras, citas ni datos específicos que no puedas sostener; mantené el guion en "
+            "afirmaciones generales y verificables sobre el tema.\n"
+        )
     trend_block = ""
     if trends:
         lst = "\n".join(f"- {t}" for t in trends[:8])
@@ -140,7 +158,7 @@ Formato del video: {vtype} — duración objetivo {dur}.
 IDENTIDAD DEL CANAL (mantené COHERENCIA con todos sus videos): mismo tono y estilo de voz
 en cada video; el CTA final invita a seguir el canal "{channel['name']}" para más de
 {channel['niche']} y encadena con el gancho (loop). {brand_line}
-{country_line}{seed}{trend_block}{memory_block}{learn_block}{visual_learn_block}
+{country_line}{seed}{research_block}{trend_block}{memory_block}{learn_block}{visual_learn_block}
 Plantillas de gancho probadas (elegí/adaptá la mejor): {_hooks_for(channel)}
 
 Reglas de retención: gancho en los primeros 2 segundos; abrí un open loop y pagalo al final;
@@ -302,11 +320,11 @@ def visuals_for_own_script(texts, niche=""):
     return {"visual_subject": (data.get("visual_subject") or "").strip(), "keywords": kws[:len(texts)]}
 
 def generate(channel, vtype="short", seed_title=None, trends=None, recent_titles=None,
-            top_performers=None, visual_learning=None):
+            top_performers=None, visual_learning=None, research_context=None):
     """Devuelve dict con title, hook, description, tags, hashtags, thumbnail_text, format, segments."""
     messages = [{"role": "system", "content": SYSTEM},
                 {"role": "user", "content": _prompt(channel, vtype, seed_title, trends, recent_titles,
-                                                    top_performers, visual_learning)}]
+                                                    top_performers, visual_learning, research_context)}]
     raw = _gemini(messages) if PROVIDER == "gemini" else _groq(messages)
     data = _extract_json(raw)
     data.setdefault("tags", [])
