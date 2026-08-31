@@ -160,7 +160,7 @@ def process_video(v):
                     found = trends.for_channel(ch, 8)
                     trend_topics = [t["topic"] for t in found]
                     for t in found[:5]:
-                        db.add_trend(ch["id"], t["topic"], t["source"], t.get("category"))
+                        db.add_trend(ch["id"], t["topic"], t["source"], t.get("category"), t.get("url"))
                     cats = ", ".join(sorted(set(t.get("category") or "" for t in found[:5])))
                     db.log("trends", f"{len(trend_topics)} tendencias ({cats})", vid=vid, cid=ch["id"])
                 except Exception as e:
@@ -169,10 +169,23 @@ def process_video(v):
             recent_titles = db.get_recent_titles(ch["id"], 40)
             top_performers = db.get_top_performers(ch["id"], 3)
             visual_learning = db.get_visual_learnings(ch["id"])
+            research_context = None
+            if v.get("seed_trend_id"):
+                # Video pedido desde una tendencia puntual (dashboard → "🎬 Generar"):
+                # investigar de verdad la noticia (bajar el artículo real), no solo
+                # narrar el titular a ciegas.
+                trend_row = db.get_trend(v["seed_trend_id"])
+                if trend_row and trend_row.get("url"):
+                    research_context = trends.fetch_article_text(trend_row["url"])
+                    db.log("trends",
+                           "Investigación real del artículo OK" if research_context
+                           else "No se pudo leer el artículo original (paywall o formato no soportado); "
+                                "se sigue solo con el titular",
+                           "info" if research_context else "warn", vid, ch["id"])
             try:
                 data = llm.generate(ch, vtype, seed_title=v.get("title"), trends=trend_topics,
                                     recent_titles=recent_titles, top_performers=top_performers,
-                                    visual_learning=visual_learning)
+                                    visual_learning=visual_learning, research_context=research_context)
             except Exception as e:
                 if trend_topics:
                     # Si falló con tendencias (ej. una tendencia sensible que el LLM rechaza,
@@ -182,7 +195,7 @@ def process_video(v):
                            "warn", vid, ch["id"])
                     data = llm.generate(ch, vtype, seed_title=v.get("title"), trends=None,
                                         recent_titles=recent_titles, top_performers=top_performers,
-                                        visual_learning=visual_learning)
+                                        visual_learning=visual_learning, research_context=research_context)
                 else:
                     raise
         db.add_script(vid, data["full_text"], data["segments"])
@@ -507,7 +520,7 @@ def refresh_global_trends():
             return
         db.clear_global_trends()
         for t in found[:60]:
-            db.add_trend(None, t["topic"], t["source"], t.get("category"))
+            db.add_trend(None, t["topic"], t["source"], t.get("category"), t.get("url"))
         db.log("trends", f"{len(found[:60])} tendencias globales refrescadas por rubro")
     except Exception as e:
         db.log("trends", f"refresh global falló: {e}", "warn")
