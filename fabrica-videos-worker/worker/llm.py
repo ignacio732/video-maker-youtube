@@ -72,13 +72,30 @@ def _hooks_for(channel):
 def _prompt(channel, vtype, seed_title, trends, recent_titles=None, top_performers=None,
            visual_learning=None, research_context=None):
     if vtype == "short":
-        dur = "18 a 28 segundos"
-        seg_hint = ("6 a 8 segmentos. Cada 'text' = UNA frase corta (8-12 palabras). "
+        target_sec = channel.get("short_target_sec")
+        if target_sec:
+            lo, hi = int(target_sec * 0.85), int(target_sec * 1.15)
+            dur = f"~{target_sec} segundos (entre {lo} y {hi})"
+            n_seg = max(4, min(30, round(target_sec / 4)))
+        else:
+            dur = "18 a 28 segundos"
+            n_seg = None
+        seg_hint = ((f"{n_seg-1} a {n_seg+1} segmentos. " if n_seg else "6 a 8 segmentos. ") +
+                    "Cada 'text' = UNA frase corta (8-12 palabras). "
                     "Segmento 1 = el GANCHO (aparece como texto y voz). "
                     "Último segmento = UN solo CTA breve que además encadene con el gancho (loop).")
     else:
-        dur = "4 a 7 minutos"
-        seg_hint = ("14 a 20 segmentos. Mantené un giro o dato nuevo cada 5-7 segundos. "
+        target_min = channel.get("long_target_min")
+        if target_min:
+            target_min = float(target_min)
+            lo, hi = round(target_min * 0.85, 1), round(target_min * 1.15, 1)
+            dur = f"~{target_min:g} minutos (entre {lo:g} y {hi:g})"
+            n_seg = max(8, min(40, round(target_min * 60 / 19)))
+        else:
+            dur = "4 a 7 minutos"
+            n_seg = None
+        seg_hint = ((f"{n_seg-2} a {n_seg+2} segmentos. " if n_seg else "14 a 20 segmentos. ") +
+                    "Mantené un giro o dato nuevo cada 5-7 segundos. "
                     "Incluí capítulos (chapters) con timestamps aproximados empezando en 0:00.")
     seed = f'TEMA PEDIDO (respetalo): "{seed_title}".\n' if seed_title else ""
     research_block = ""
