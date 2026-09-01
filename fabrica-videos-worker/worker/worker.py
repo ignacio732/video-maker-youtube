@@ -506,14 +506,28 @@ def run_scheduled_publishing():
                 due = True
         if not due:
             continue
-        ready = db.get_ready_videos(ch["id"], limit=1)
-        if not ready:
+        # Se piden varios candidatos (no solo 1): si el más viejo está roto (sin
+        # video_url, ej. una fila que quedó mal por algún corte a mitad de proceso),
+        # antes se reintentaba SIEMPRE el mismo roto cada 15 min y nunca se avanzaba
+        # a los siguientes, bloqueando la publicación de todo el canal indefinidamente.
+        candidates = db.get_ready_videos(ch["id"], limit=5)
+        if not candidates:
             continue
-        v = ready[0]
-        data = {"title": v.get("title"), "description": v.get("description") or ""}
-        ok = publish_video(v["id"], ch, data, v.get("video_url"), v.get("thumbnail_url"),
-                           manual=True, vtype=v.get("type", "short"))
-        if ok:
+        v, ok = None, False
+        for cand in candidates:
+            if not cand.get("video_url"):
+                db.set_status(cand["id"], "failed",
+                              error="video_url nulo detectado en publicación programada; "
+                                    "se salta para no bloquear la cola")
+                db.log("publish", f"'{cand.get('title')}' sin video_url — se marca fallido y se sigue",
+                       "warn", cand["id"], ch["id"])
+                continue
+            v = cand
+            data = {"title": v.get("title"), "description": v.get("description") or ""}
+            ok = publish_video(v["id"], ch, data, v.get("video_url"), v.get("thumbnail_url"),
+                               manual=True, vtype=v.get("type", "short"))
+            break
+        if v and ok:
             db.update_channel(ch["id"], last_auto_published_at=datetime.now(timezone.utc).isoformat())
             db.log("publish", f"Publicación programada (ritmo {per}/{days}d, cada ~{interval_h:.1f}h)",
                    vid=v["id"], cid=ch["id"])
