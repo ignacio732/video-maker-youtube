@@ -460,77 +460,84 @@ def autopilot():
         db.log("autopilot", f"Encolado {vtype} para '{ch['name']}'", cid=ch["id"])
 
 def _autopilot_paced(ch):
-    """Canal autónomo: calcula cuántos videos hacen falta en la cola (pendientes o ya
-    listos, sin publicar todavía) para sostener el ritmo configurado, con un colchón de
-    unos días — nunca genera de más ni se queda corto."""
-    per = max(1, ch.get("videos_per_period") or 3)
-    days = max(1, ch.get("period_days") or 7)
-    rate_per_day = per / days
+    """Canal autónomo: calcula cuántos SHORTS y cuántos LARGOS hacen falta en la cola
+    por separado (antes era un solo contador con una regla fija de 1 largo cada 3 —
+    ahora cada tipo tiene su propia cuota configurable, ej. '2 shorts + 1 largo por día').
+    Colchón de unos días — nunca genera de más ni se queda corto."""
     buffer_days = 3
-    target_queue = max(1, math.ceil(rate_per_day * buffer_days))
-    open_count = db.count_open_videos(ch["id"])
-    if open_count >= target_queue:
-        return
-    fmt = ch.get("format") or "both"
+    days = max(1, ch.get("period_days") or 7)
+    shorts_target = max(0, ch.get("shorts_per_period") if ch.get("shorts_per_period") is not None
+                        else (ch.get("videos_per_period") or 3))
+    longs_target = max(0, ch.get("longs_per_period") or 0)
+    open_short = db.count_open_videos(ch["id"], vtype="short")
+    open_long = db.count_open_videos(ch["id"], vtype="long")
     made = 0
     max_per_run = 5  # tope de seguridad: nunca encolar de una un montón por un cálculo raro
-    while open_count + made < target_queue and made < max_per_run:
-        if fmt == "both":
-            vtype = "long" if (open_count + made) % 3 == 2 else "short"
-        else:
-            vtype = "long" if fmt == "long" else "short"
-        db.enqueue_video(ch["id"], vtype)
-        made += 1
+    for vtype, target, open_n in (("short", shorts_target, open_short), ("long", longs_target, open_long)):
+        if target <= 0:
+            continue
+        rate_per_day = target / days
+        target_queue = max(1, math.ceil(rate_per_day * buffer_days))
+        n = 0
+        while open_n + n < target_queue and made < max_per_run:
+            db.enqueue_video(ch["id"], vtype)
+            n += 1; made += 1
     if made:
         db.log("autopilot",
-               f"Canal autónomo '{ch['name']}': encolados {made} video(s) para sostener "
-               f"{per}/{days}d (~{rate_per_day:.2f}/día, colchón {buffer_days}d)", cid=ch["id"])
+               f"Canal autónomo '{ch['name']}': encolados {made} video(s) — objetivo "
+               f"{shorts_target} short(s) + {longs_target} largo(s) cada {days}d", cid=ch["id"])
+
+def _publish_next_ready(ch, vtype, per, days, last_field):
+    """Publica el próximo video 'listo' de un tipo (short/long) si ya corresponde según
+    su propia cuota — cada tipo tiene su propio contador y su propio último-publicado,
+    para poder sostener mezclas como '2 shorts + 1 largo por día' de verdad."""
+    if per <= 0:
+        return
+    interval_h = 24.0 * days / per
+    last = ch.get(last_field)
+    due = True
+    if last:
+        try:
+            last_dt = datetime.fromisoformat(str(last).replace("Z", "+00:00"))
+            due = (datetime.now(timezone.utc) - last_dt).total_seconds() / 3600.0 >= interval_h
+        except Exception:
+            due = True
+    if not due:
+        return
+    # Varios candidatos (no solo 1): si el más viejo está roto (sin video_url, ej. una
+    # fila que quedó mal por algún corte a mitad de proceso), antes se reintentaba
+    # SIEMPRE el mismo roto cada 15 min y nunca se avanzaba, bloqueando el canal entero.
+    candidates = db.get_ready_videos(ch["id"], vtype=vtype, limit=5)
+    for cand in candidates:
+        if not cand.get("video_url"):
+            db.set_status(cand["id"], "failed",
+                          error="video_url nulo detectado en publicación programada; se salta")
+            db.log("publish", f"'{cand.get('title')}' sin video_url — se marca fallido y se sigue",
+                   "warn", cand["id"], ch["id"])
+            continue
+        data = {"title": cand.get("title"), "description": cand.get("description") or ""}
+        ok = publish_video(cand["id"], ch, data, cand.get("video_url"), cand.get("thumbnail_url"),
+                           manual=True, vtype=vtype)
+        if ok:
+            db.update_channel(ch["id"], **{last_field: datetime.now(timezone.utc).isoformat()})
+            db.log("publish", f"Publicación programada ({vtype}, ritmo {per}/{days}d, cada ~{interval_h:.1f}h)",
+                   vid=cand["id"], cid=ch["id"])
+        return  # un solo intento de este tipo por corrida, roto o no
 
 def run_scheduled_publishing():
     """Para canales autónomos con auto-publicar activo: en vez de publicar apenas
     termina de renderizarse (lo cual tira todo junto si se generaron varios seguidos),
-    publica el próximo video 'listo' cuando corresponde según el ritmo configurado."""
+    publica el próximo 'listo' de cada tipo cuando corresponde según SU propia cuota
+    (shorts y largos se sostienen por separado, ej. '2 shorts + 1 largo por día')."""
     for ch in db.get_active_channels():
         if not ch.get("autonomous") or not ch.get("publish_enabled"):
             continue
-        per = max(1, ch.get("videos_per_period") or 3)
+        shorts_target = ch.get("shorts_per_period") if ch.get("shorts_per_period") is not None \
+            else (ch.get("videos_per_period") or 3)
+        longs_target = ch.get("longs_per_period") or 0
         days = max(1, ch.get("period_days") or 7)
-        interval_h = 24.0 * days / per
-        last = ch.get("last_auto_published_at")
-        due = True
-        if last:
-            try:
-                last_dt = datetime.fromisoformat(str(last).replace("Z", "+00:00"))
-                due = (datetime.now(timezone.utc) - last_dt).total_seconds() / 3600.0 >= interval_h
-            except Exception:
-                due = True
-        if not due:
-            continue
-        # Se piden varios candidatos (no solo 1): si el más viejo está roto (sin
-        # video_url, ej. una fila que quedó mal por algún corte a mitad de proceso),
-        # antes se reintentaba SIEMPRE el mismo roto cada 15 min y nunca se avanzaba
-        # a los siguientes, bloqueando la publicación de todo el canal indefinidamente.
-        candidates = db.get_ready_videos(ch["id"], limit=5)
-        if not candidates:
-            continue
-        v, ok = None, False
-        for cand in candidates:
-            if not cand.get("video_url"):
-                db.set_status(cand["id"], "failed",
-                              error="video_url nulo detectado en publicación programada; "
-                                    "se salta para no bloquear la cola")
-                db.log("publish", f"'{cand.get('title')}' sin video_url — se marca fallido y se sigue",
-                       "warn", cand["id"], ch["id"])
-                continue
-            v = cand
-            data = {"title": v.get("title"), "description": v.get("description") or ""}
-            ok = publish_video(v["id"], ch, data, v.get("video_url"), v.get("thumbnail_url"),
-                               manual=True, vtype=v.get("type", "short"))
-            break
-        if v and ok:
-            db.update_channel(ch["id"], last_auto_published_at=datetime.now(timezone.utc).isoformat())
-            db.log("publish", f"Publicación programada (ritmo {per}/{days}d, cada ~{interval_h:.1f}h)",
-                   vid=v["id"], cid=ch["id"])
+        _publish_next_ready(ch, "short", max(0, shorts_target), days, "last_short_published_at")
+        _publish_next_ready(ch, "long", max(0, longs_target), days, "last_long_published_at")
 
 def refresh_global_trends():
     """Refresca las tendencias globales por rubro (para la vista del dashboard)."""
