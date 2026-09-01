@@ -51,15 +51,21 @@ def channel_has_open_video(cid):
                            "select": "id", "limit": "1"})
     return len(rows) > 0
 
-def count_open_videos(cid):
-    rows = _get("videos", {"channel_id": f"eq.{cid}",
-                           "status": "in.(pending,scripting,voicing,sourcing,rendering,ready,publishing)",
-                           "select": "id"})
+def count_open_videos(cid, vtype=None):
+    params = {"channel_id": f"eq.{cid}",
+             "status": "in.(pending,scripting,voicing,sourcing,rendering,ready,publishing)",
+             "select": "id"}
+    if vtype:
+        params["type"] = f"eq.{vtype}"
+    rows = _get("videos", params)
     return len(rows)
 
-def get_ready_videos(cid, limit=1):
-    return _get("videos", {"channel_id": f"eq.{cid}", "status": "eq.ready",
-                           "select": "*", "order": "created_at.asc", "limit": str(limit)})
+def get_ready_videos(cid, vtype=None, limit=1):
+    params = {"channel_id": f"eq.{cid}", "status": "eq.ready",
+             "select": "*", "order": "created_at.asc", "limit": str(limit)}
+    if vtype:
+        params["type"] = f"eq.{vtype}"
+    return _get("videos", params)
 
 def get_recent_titles(cid, limit=40):
     """Memoria de contenido: títulos ya usados en el canal (cualquier estado), para
