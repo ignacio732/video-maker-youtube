@@ -22,6 +22,19 @@ def _download(url, dest):
 MAX_VIDEOS = int(os.environ.get("MAX_VIDEOS_PER_RUN", "3"))
 PRIVACY = os.environ.get("YT_PRIVACY", "public")
 
+# Voz por defecto si el canal no tiene una elegida explícitamente, según su idioma.
+_DEFAULT_VOICE_BY_LANG = {
+    "es": "es-AR-TomasNeural",
+    "en": "en-US-AndrewNeural",
+    "pt": "pt-BR-AntonioNeural",
+}
+def _default_voice(channel):
+    lang = (channel.get("language") or "es").lower()
+    for prefix, voice in _DEFAULT_VOICE_BY_LANG.items():
+        if lang.startswith(prefix):
+            return voice
+    return _DEFAULT_VOICE_BY_LANG["es"]
+
 # Etiquetas reconocidas en un guion propio "con formato" (hook / guion de voz /
 # plano y edición / prompt visual completo / cta / control factual). Si el usuario
 # pega un guion con estas secciones, sólo se narra lo que corresponde narrar
@@ -213,7 +226,7 @@ def process_video(v):
         # 2) VOZ + timings
         db.set_status(vid, "voicing")
         mp3 = os.path.join(td, "voz.mp3")
-        words = render.synth_voice(data["full_text"], ch.get("voice") or "es-AR-TomasNeural", mp3)
+        words = render.synth_voice(data["full_text"], ch.get("voice") or _default_voice(ch), mp3)
         dur = render.audio_duration(mp3)
         db.log("voice", f"Voz {dur:.0f}s, {len(words)} palabras", vid=vid, cid=ch["id"])
 
