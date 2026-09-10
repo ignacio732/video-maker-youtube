@@ -32,6 +32,9 @@ def _language_note(channel):
     if lang.startswith("en"):
         return ("Write in clear, neutral, global English (not UK/AU-specific slang), "
                 "suited for an international English-speaking audience.")
+    if lang.startswith("pt"):
+        return ("Escreva em português do Brasil neutro e claro (não use gírias regionais "
+                "muito específicas), adequado para um público brasileiro amplo.")
     if not lang.startswith("es"):
         return f"Escribí en el idioma '{lang}' (código ISO), de forma neutra y clara."
     if voice.startswith("es-ar") or voice.startswith("es-uy"):
@@ -65,9 +68,24 @@ HOOKS_EN = (
     '8) The real reason: "This is the real reason why X."'
 )
 
+HOOKS_PT = (
+    '1) Afirmação ousada/contraintuitiva: "Tudo que você sabe sobre X está errado." '
+    '2) Curiosity gap: "Tem algo sobre X que ninguém te conta." '
+    '3) Aviso: "Nunca faça X sem saber disso." '
+    '4) Dado chocante: "90% das pessoas não sabem que X." '
+    '5) Pergunta direta: "Você sabe por que X?" '
+    '6) Ranking teaser: "O número 3 vai te surpreender." '
+    '7) Segredo: "Só poucos conhecem isso." '
+    '8) O motivo real: "Esse é o verdadeiro motivo pelo qual X."'
+)
+
 def _hooks_for(channel):
     lang = (channel.get("language") or "es").lower()
-    return HOOKS_EN if lang.startswith("en") else HOOKS_ES
+    if lang.startswith("en"):
+        return HOOKS_EN
+    if lang.startswith("pt"):
+        return HOOKS_PT
+    return HOOKS_ES
 
 def _prompt(channel, vtype, seed_title, trends, recent_titles=None, top_performers=None,
            visual_learning=None, research_context=None):
