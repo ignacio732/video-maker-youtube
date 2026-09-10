@@ -43,25 +43,35 @@ def _political(text):
 # --- Rubros: cada uno con su consulta de Google News y de GDELT ---
 CATEGORIES = {
     "salud":        {"gn": "salud OR bienestar OR hábitos saludables OR sueño OR longevidad",
+                     "gn_pt": "saúde OR bem-estar OR hábitos saudáveis OR sono OR longevidade",
                      "gdelt": "health wellbeing longevity", "kw": ["salud","bienestar","cuerpo","dormir","longev"]},
     "fitness":      {"gn": "crecimiento muscular OR rutina de ejercicios OR entrenamiento de fuerza OR salud física OR gimnasio en casa",
+                     "gn_pt": "crescimento muscular OR treino OR treinamento de força OR saúde física OR academia em casa",
                      "gdelt": "muscle growth strength training", "kw": ["ejercicio","muscul","fuerza","entren","gimnasio"]},
     "ciencia":      {"gn": "estudio científico OR descubrimiento OR ciencia OR investigación",
+                     "gn_pt": "estudo científico OR descoberta OR ciência OR pesquisa",
                      "gdelt": "science discovery study", "kw": ["ciencia","estudio","descubr","investig","cuánt","cuant","físic","fisic","química","quimic"]},
     "espacio":      {"gn": "espacio OR astronomía OR NASA OR planeta OR telescopio OR eclipse",
+                     "gn_pt": "espaço OR astronomia OR NASA OR planeta OR telescópio OR eclipse",
                      "gdelt": "space astronomy NASA", "kw": ["espacio","astro","planeta","nasa","eclipse","luna"]},
     "tecnologia":   {"gn": "inteligencia artificial OR robot OR tecnología OR innovación OR gadget",
                      "gn_en": "artificial intelligence OR robot OR technology OR innovation OR gadget",
+                     "gn_pt": "inteligência artificial OR robô OR tecnologia OR inovação OR gadget",
                      "gdelt": "artificial intelligence robot technology", "kw": ["tecno","robot","inteligencia artificial","ia ","gadget","app"]},
     "mente":        {"gn": "psicología OR cerebro OR productividad OR hábitos OR memoria",
+                     "gn_pt": "psicologia OR cérebro OR produtividade OR hábitos OR memória",
                      "gdelt": "psychology brain productivity", "kw": ["psico","cerebro","mente","habito","hábito","memoria"]},
     "curiosidades": {"gn": "dato curioso OR sabías que OR fenómeno natural OR récord Guinness OR hecho insólito de la ciencia",
+                     "gn_pt": "curiosidade OR você sabia OR fenômeno natural OR recorde Guinness OR fato insólito da ciência",
                      "gdelt": "amazing fact record guinness", "kw": ["curios","insólit","insolit","récord","record","sabías"]},
     "animales":     {"gn": "animales OR naturaleza OR especie OR océano OR vida salvaje",
+                     "gn_pt": "animais OR natureza OR espécie OR oceano OR vida selvagem",
                      "gdelt": "animals wildlife nature", "kw": ["animal","natura","especie","océano","oceano","salvaje"]},
     "historia":     {"gn": "historia OR arqueología OR civilización antigua OR descubrimiento histórico",
+                     "gn_pt": "história OR arqueologia OR civilização antiga OR descoberta histórica",
                      "gdelt": "history archaeology ancient", "kw": ["histor","arqueo","civiliz","antigu"]},
     "dinero":       {"gn": "finanzas personales OR ahorro OR hábitos de dinero OR productividad financiera",
+                     "gn_pt": "finanças pessoais OR economia doméstica OR hábitos financeiros OR produtividade financeira",
                      "gdelt": "personal finance saving money habits", "kw": ["ahorr","finanzas","dinero","emprend","invertir"]},
     "fertilidad":   {"gn": "fertilidad OR ovulación OR reserva ovárica OR FIV OR reproducción asistida OR fertilidad masculina",
                      "gdelt": "fertility ovulation IVF reproductive health",
@@ -167,11 +177,12 @@ def discover(categories=None, hl="es-419", gl="AR", per_cat=4, include_trends=Tr
     cats = categories or list(CATEGORIES.keys())
     items = []
     en = lang.startswith("en")
+    pt = lang.startswith("pt")
     for cat in cats:
         cfg = CATEGORIES.get(cat)
         if not cfg:
             continue
-        query = (cfg.get("gn_en") if en else None) or cfg["gn"]
+        query = ((cfg.get("gn_en") if en else cfg.get("gn_pt") if pt else None)) or cfg["gn"]
         for it in google_news(query, hl, gl, maxn=per_cat + 2):
             items.append({"topic": it["title"], "url": it.get("url"), "source": "google_news", "category": cat, "metric": 2})
         for it in gdelt_news(cfg["gdelt"], maxrecords=per_cat)[:per_cat]:
@@ -244,8 +255,9 @@ def for_channel(channel, max_topics=8):
     targets = channel_target_countries(channel)
     lang = channel.get("language", "es")
     en = lang.startswith("en")
-    gl = _COUNTRY_GL[targets[0]] if targets else ("US" if en else "US")
-    hl = "en" if en else "es-419"  # antes quedaba "es-419" fijo incluso para canales en inglés
+    pt = lang.startswith("pt")
+    gl = _COUNTRY_GL[targets[0]] if targets else ("US" if en else "BR" if pt else "US")
+    hl = "en" if en else "pt-BR" if pt else "es-419"  # antes quedaba "es-419" fijo incluso para canales en inglés/portugués
     items = discover(cats, hl, gl, per_cat=4, lang=lang)
     # además, novedad general filtrada por rubro
     for t in wikipedia_hot(lang):
