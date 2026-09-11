@@ -40,6 +40,19 @@ _POL_RE = re.compile(r"\b(" + "|".join(re.escape(k) for k in _POL_ECO) + r")", r
 def _political(text):
     return bool(_POL_RE.search(text or ""))
 
+# --- Filtro liviano para canales de sitios de referencia (ej. finanzas/economía real) ---
+# Estos canales SÍ quieren dólar/inflación/política económica — es el contenido en sí.
+# Solo descartamos tragedia/violencia real, nunca apto para ningún canal.
+_SENSITIVE = [
+    "atentad", "terroris", "11-s", "11s", "torres gemelas", "al qaeda", "isis",
+    "yihad", "masacre", "tirote", "genocidio", "secuestr", "asesinat", "femicid",
+    "homicid", "violacion", "violación", "suicid", "abuso sexual", "pedofil",
+    "accidente aéreo", "accidente aereo", "tragedia", "explosion", "explosión",
+]
+_SENSITIVE_RE = re.compile(r"\b(" + "|".join(re.escape(k) for k in _SENSITIVE) + r")", re.IGNORECASE)
+def _sensitive(text):
+    return bool(_SENSITIVE_RE.search(text or ""))
+
 # --- Rubros: cada uno con su consulta de Google News y de GDELT ---
 CATEGORIES = {
     "salud":        {"gn": "salud OR bienestar OR hábitos saludables OR sueño OR longevidad",
@@ -250,7 +263,13 @@ def channel_target_countries(channel):
     return found if len(found) == 1 else []
 
 def for_channel(channel, max_topics=8):
-    """Temas candidatos para un canal (rubros afines, sin política/economía)."""
+    """Temas candidatos para un canal (rubros afines, sin política/economía) — salvo
+    que el canal declare `reference_sites`, en cuyo caso se usan esos sitios puntuales
+    como fuente (sin el filtro de política/economía, que ahí sería contraproducente)."""
+    ref_sites = channel.get("reference_sites") or []
+    if ref_sites:
+        items = reference_news(ref_sites, per_site=max(3, (max_topics // max(1, len(ref_sites))) + 2))
+        return _dedupe(items)[:max_topics]
     cats = _channel_categories(channel)
     targets = channel_target_countries(channel)
     lang = channel.get("language", "es")
@@ -303,3 +322,103 @@ def fetch_article_text(url, max_chars=4000):
         return full[:max_chars]
     except Exception:
         return None
+
+# ---------------------------------------------------------- SITIOS DE REFERENCIA
+# Canales de nicho puntual (ej. economía/finanzas real, no evergreen) pueden declarar
+# `reference_sites`: dominios/URLs propios de donde sacar los temas del día, sin pasar
+# por las categorías genéricas (que filtran política/economía a propósito).
+# Feeds RSS conocidos por dominio (evita adivinar rutas al pedo en cada corrida).
+_KNOWN_FEEDS = {
+    "ambito.com": [
+        "https://www.ambito.com/rss/finanzas.xml",
+        "https://www.ambito.com/rss/economia.xml",
+        "https://www.ambito.com/rss/negocios.xml",
+    ],
+}
+# Rutas genéricas a probar en dominios sin feed conocido.
+_GENERIC_FEED_PATHS = ["/rss/home.xml", "/rss.xml", "/feed", "/feed/", "/rss", "/rss/"]
+
+def _domain(url):
+    return re.sub(r"^https?://(www\.)?", "", url).split("/")[0].lower()
+
+def _parse_rss(xml_text, maxn=8):
+    out = []
+    try:
+        root = ET.fromstring(xml_text)
+        for it in root.findall(".//item")[:maxn]:
+            raw_title = it.findtext("title") or ""
+            title = _clean(re.sub(r"^<!\[CDATA\[(.*)\]\]>$", r"\1", raw_title, flags=re.DOTALL))
+            link = _clean(it.findtext("link") or "")
+            if title:
+                out.append({"title": title, "url": link or None})
+    except ET.ParseError:
+        pass
+    return out
+
+def fetch_rss(url, maxn=8):
+    try:
+        r = requests.get(url, headers=UA, timeout=15)
+        if r.status_code != 200:
+            return []
+        r.encoding = "utf-8"
+        if "<rss" not in r.text[:300] and "<?xml" not in r.text[:100]:
+            return []
+        return _parse_rss(r.text, maxn)
+    except Exception:
+        return []
+
+def scrape_headlines(url, maxn=8):
+    """Fallback cuando el sitio no tiene RSS accesible: extrae titulares reales del
+    home/sección vía atributo title= de los <a>, descartando texto de navegación
+    (muy corto, o frases tipo 'Ir a'/'Seguinos'/'Ver')."""
+    try:
+        r = requests.get(url, headers=UA, timeout=15)
+        if r.status_code != 200:
+            return []
+        h = r.text
+        pairs = re.findall(r'<a[^>]+href="([^"]+)"[^>]*title="([^"]{25,140})"', h)
+        pairs += [(hr, t) for t, hr in re.findall(r'<a[^>]+title="([^"]{25,140})"[^>]*href="([^"]+)"', h)]
+        junk = ("ir a ", "seguinos", "ver todos", "ver notas", "compartir", "https://")
+        seen, out = set(), []
+        for href, t in pairs:
+            t = html.unescape(t).strip()
+            low = t.lower()
+            if any(low.startswith(j) for j in junk) or " " not in t:
+                continue
+            k = re.sub(r"[^a-z0-9]", "", low)[:50]
+            if k and k not in seen:
+                seen.add(k)
+                out.append({"title": t, "url": href if href.startswith("http") else url.rstrip("/") + "/" + href.lstrip("/")})
+            if len(out) >= maxn:
+                break
+        return out
+    except Exception:
+        return []
+
+def reference_news(sites, per_site=6):
+    """Temas del día para un canal de sitios de referencia puntuales (ej. finanzas
+    reales), sin pasar por el filtro de política/economía (acá ES el contenido)."""
+    items = []
+    for site in sites or []:
+        site = site.strip()
+        if not site:
+            continue
+        base = site if site.startswith("http") else f"https://{site}"
+        dom = _domain(base)
+        found = []
+        for feed in _KNOWN_FEEDS.get(dom, []):
+            found = fetch_rss(feed, per_site)
+            if found:
+                break
+        if not found:
+            for path in _GENERIC_FEED_PATHS:
+                found = fetch_rss(base.rstrip("/") + path, per_site)
+                if found:
+                    break
+        if not found:
+            found = scrape_headlines(base, per_site)
+        for it in found:
+            if not _sensitive(it["title"]):
+                items.append({"topic": it["title"], "url": it.get("url"), "source": dom,
+                              "category": "referencia", "metric": 2})
+    return _dedupe(items)
