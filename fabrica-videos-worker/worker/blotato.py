@@ -7,7 +7,7 @@ públicas en Supabase Storage, así que se pasan directo (sin subir nada extra).
 Docs: https://help.blotato.com/api  — Base: https://backend.blotato.com/v2
 Auth: header 'blotato-api-key'.
 """
-import requests
+import requests, time
 
 BASE = "https://backend.blotato.com/v2"
 
@@ -86,6 +86,18 @@ def get_post_analytics(api_key, blotato_post_id):
         return None
     return r.json()
 
+def get_post_status(api_key, submission_id):
+    """GET /v2/posts/{id} — estado real de un envío (Blotato acepta con 201 al toque,
+    pero la publicación en la red social pasa después, de forma asíncrona: recién ahí
+    puede aparecer 'failed', por ejemplo por una restricción de la cuenta)."""
+    r = requests.get(f"{BASE}/posts/{submission_id}", headers=_headers(api_key), timeout=20)
+    if r.status_code >= 400:
+        return None
+    try:
+        return r.json()
+    except Exception:
+        return None
+
 def publish(api_key, platform, account_id, video_url, title, description,
             privacy="public", thumbnail_url=None, ai_generated=True, trial=None):
     """
@@ -93,6 +105,13 @@ def publish(api_key, platform, account_id, video_url, title, description,
     Devuelve el JSON de respuesta. Lanza excepción si falla.
 
     `trial` (solo tiene efecto en instagram): ver _target().
+
+    IMPORTANTE: el POST inicial devuelve 201 apenas Blotato ACEPTA el envío, no cuando
+    la red social efectivamente publica — eso pasa después, de forma asíncrona. Una
+    restricción de la cuenta (ej. "no cumple el mínimo de seguidores para reels de
+    prueba") recién aparece unos segundos después consultando el estado. Por eso acá
+    se espera un toque y se confirma antes de darlo por publicado — sin este chequeo,
+    un fallo así quedaba registrado como éxito.
 
     YouTube exige el canal verificado por teléfono para aceptar thumbnailUrl por API:
     si Blotato rechaza por eso, se reintenta UNA vez sin miniatura personalizada en vez
@@ -121,6 +140,18 @@ def publish(api_key, platform, account_id, video_url, title, description,
         resp = {"raw": r.text}
     if thumb_blocked:
         resp["_thumbnail_fallback"] = True
+
+    # Confirmación asíncrona: esperamos un toque y consultamos el estado real.
+    submission_id = resp.get("postSubmissionId") if isinstance(resp, dict) else None
+    if submission_id:
+        time.sleep(6)
+        status = get_post_status(api_key, submission_id)
+        if status:
+            if status.get("status") == "failed":
+                raise RuntimeError(f"Blotato {platform} rechazó la publicación: "
+                                   f"{status.get('errorMessage') or 'sin detalle'}")
+            if status.get("status") == "published" and status.get("publicUrl"):
+                resp["url"] = status["publicUrl"]
     return resp
 
 def publish_youtube(api_key, account_id, video_url, title, description,
