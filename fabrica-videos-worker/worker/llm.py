@@ -354,6 +354,32 @@ def visuals_for_own_script(texts, niche=""):
         kws = kws + [[] for _ in range(len(texts) - len(kws))]
     return {"visual_subject": (data.get("visual_subject") or "").strip(), "keywords": kws[:len(texts)]}
 
+def alt_hook(data, channel):
+    """Test A/B de hooks: dado un guion ya armado (mismo tema, mismo cuerpo), genera
+    UN hook alternativo con un ángulo/plantilla distinto al original, en el mismo
+    idioma del canal, para publicar ambas versiones como reels de prueba y ver cuál
+    engancha más (mismo contenido, solo cambia el gancho de los primeros segundos)."""
+    lang = (channel.get("language") or "es").lower()
+    hooks = HOOKS_EN if lang.startswith("en") else HOOKS_PT if lang.startswith("pt") else HOOKS_ES
+    original = data.get("hook") or (data.get("segments") or [{}])[0].get("text", "")
+    body_preview = " ".join(s.get("text", "") for s in (data.get("segments") or [])[1:3])
+    prompt = (
+        f"Tema/título del video: {data.get('title', '')}\n"
+        f"Hook original (primera frase): \"{original}\"\n"
+        f"Resto del guion (para contexto, NO lo reescribas): {body_preview}\n\n"
+        f"Plantillas de hook disponibles: {hooks}\n\n"
+        "Escribí UN hook alternativo para el MISMO video (mismo tema, mismo cuerpo) "
+        "pero con una plantilla/ángulo DISTINTO al del hook original — para probar cuál "
+        "engancha más en un test A/B. Mismo idioma que el hook original. Una sola frase, "
+        "sin comillas ni explicación.\n"
+        'Devolvé SOLO un JSON: {"hook": "..."}'
+    )
+    messages = [{"role": "system", "content": "Respondés SIEMPRE en JSON válido, sin texto extra."},
+                {"role": "user", "content": prompt}]
+    raw = _gemini(messages) if PROVIDER == "gemini" else _groq(messages)
+    alt = (_extract_json(raw).get("hook") or "").strip()
+    return alt if alt and alt.lower() != original.strip().lower() else None
+
 def generate(channel, vtype="short", seed_title=None, trends=None, recent_titles=None,
             top_performers=None, visual_learning=None, research_context=None):
     """Devuelve dict con title, hook, description, tags, hashtags, thumbnail_text, format, segments."""
