@@ -62,6 +62,30 @@ def _target(platform, title, privacy, thumbnail_url, ai=True, page_id=None, tria
         return {"targetType": "facebook", "pageId": str(page_id or ""), "mediaType": "reel"}
     return {"targetType": platform}
 
+def list_top_performing(api_key, since=None, until=None, platform=None, sort_by="views_count", limit=100):
+    """GET /v2/analytics — últimos posts publicados con su métrica más reciente e
+    historial de snapshots. Se usa para resolver el id de análisis de cada post
+    (matcheando por post_url) y para traer vistas/likes/comentarios/reach."""
+    params = {"sortBy": sort_by, "limit": str(limit)}
+    if since:
+        params["since"] = since
+    if until:
+        params["until"] = until
+    if platform:
+        params["platform"] = platform
+    r = requests.get(f"{BASE}/analytics", headers=_headers(api_key), params=params, timeout=30)
+    if r.status_code >= 400:
+        return []
+    data = r.json()
+    return data.get("items") or []
+
+def get_post_analytics(api_key, blotato_post_id):
+    """GET /v2/posts/{id}/analytics — métricas + historial de UN post ya resuelto."""
+    r = requests.get(f"{BASE}/posts/{blotato_post_id}/analytics", headers=_headers(api_key), timeout=30)
+    if r.status_code >= 400:
+        return None
+    return r.json()
+
 def publish(api_key, platform, account_id, video_url, title, description,
             privacy="public", thumbnail_url=None, ai_generated=True, trial=None):
     """
