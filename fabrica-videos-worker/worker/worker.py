@@ -464,8 +464,10 @@ def publish_video(vid, ch, data, video_url, thumb_url, manual=False, vtype="shor
                    vid=vid, cid=ch["id"])
             if trial:
                 db.update_video(vid, published_as_trial=True)
+            db.add_publication(vid, ch["id"], plat, acc, is_trial=bool(trial), status="ok", post_url=url)
         except Exception as e:
             db.log("publish", f"{plat} (cuenta {acc}) falló: {e}", "warn", vid, ch["id"])
+            db.add_publication(vid, ch["id"], plat, acc, is_trial=bool(trial), status="failed", error=str(e))
     if ok_any:
         db.update_video(vid, status="published", youtube_url=yt_url, published_at="now()")
         return True
@@ -582,6 +584,48 @@ def refresh_global_trends():
     except Exception as e:
         db.log("trends", f"refresh global falló: {e}", "warn")
 
+def sync_analytics():
+    """Resuelve el id de analytics de Blotato para publicaciones recientes (matcheando
+    por post_url) y guarda un snapshot de vistas/likes/comentarios en video_metrics —
+    la tabla que get_top_performers() y get_visual_learnings() ya leían pero que hasta
+    ahora nadie alimentaba. Corre una vez por corrida del worker, es liviano (1-2 GETs)."""
+    api_key = (db.get_secret("blotato_api_key") or {}).get("key")
+    if not api_key:
+        return
+    import blotato
+    pending = db.get_unresolved_publications(limit=200)
+    if not pending:
+        return
+    by_url = {p["post_url"]: p for p in pending if p.get("post_url")}
+    if not by_url:
+        return
+    since = min(p["published_at"] for p in pending)
+    try:
+        items = blotato.list_top_performing(api_key, since=since, limit=100)
+    except Exception as e:
+        db.log("analytics", f"Error consultando Blotato analytics: {e}", "warn")
+        return
+    matched = 0
+    for it in items:
+        url = it.get("postUrl")
+        pub = by_url.get(url)
+        if not pub:
+            continue
+        db.resolve_publication(pub["id"], it.get("id"))
+        m = (it.get("latestMetrics") or {}).get("metrics") or {}
+        def _num(key):
+            v = m.get(key)
+            try:
+                return int(v) if v is not None else None
+            except (TypeError, ValueError):
+                return None
+        db.add_video_metric(pub["video_id"], views=_num("viewsCount"),
+                            likes=_num("likesCount"), comments=_num("commentsCount"),
+                            source="blotato")
+        matched += 1
+    if matched:
+        db.log("analytics", f"Sincronizadas métricas de {matched} publicación(es)")
+
 def main():
     if "--no-auto" not in sys.argv:
         try:
@@ -592,6 +636,10 @@ def main():
             run_scheduled_publishing()
         except Exception as e:
             db.log("publish", f"Error en publicación programada: {e}", "error")
+        try:
+            sync_analytics()
+        except Exception as e:
+            db.log("analytics", f"Error: {e}", "error")
         refresh_global_trends()
 
     pend = db.get_pending_videos(MAX_VIDEOS)
