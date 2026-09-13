@@ -67,6 +67,16 @@ def get_ready_videos(cid, vtype=None, limit=1):
         params["type"] = f"eq.{vtype}"
     return _get("videos", params)
 
+def count_trial_reels_today(cid):
+    """Cuenta reels de Instagram publicados como 'prueba' HOY (UTC) para este canal,
+    para respetar el tope diario que el usuario configuró a mano en el canal
+    (trial_reels_per_day) — sin este chequeo se publicarían todos los que haya listos."""
+    from datetime import datetime, timezone
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    rows = _get("videos", {"channel_id": f"eq.{cid}", "published_as_trial": "eq.true",
+                           "published_at": f"gte.{today}T00:00:00", "select": "id"})
+    return len(rows)
+
 def get_recent_titles(cid, limit=40):
     """Memoria de contenido: títulos ya usados en el canal (cualquier estado), para
     que el LLM no repita tema. No incluye el guion completo, solo el título."""
