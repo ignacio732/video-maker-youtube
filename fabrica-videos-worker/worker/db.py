@@ -1,5 +1,6 @@
 """Cliente Supabase (REST) para el esquema ytfactory. Usa service_role en el worker."""
 import os, requests
+from datetime import datetime
 
 URL = os.environ["SUPABASE_URL"].rstrip("/")
 KEY = os.environ["SUPABASE_SERVICE_KEY"]          # service_role (bypassa RLS)
@@ -144,6 +145,65 @@ def add_video_metric(video_id, views=None, likes=None, comments=None, source="bl
         "video_id": video_id, "views": views, "likes": likes, "comments": comments,
         "source": source,
     })
+
+def best_hour_utc(cid, min_sample=5):
+    """Hora UTC (0-23) con mejor promedio de vistas históricas de publicación para
+    este canal, o None si todavía no hay muestra suficiente. La usa
+    _publish_next_ready para esperar la ventana que mejor rinde en vez de publicar
+    apenas se cumple el intervalo, a ciegas."""
+    pubs = _get("video_publications", {"channel_id": f"eq.{cid}", "status": "eq.ok",
+                                       "select": "video_id,published_at"})
+    if len(pubs) < min_sample:
+        return None
+    metrics = _get("video_metrics", {"select": "video_id,views,fetched_at", "order": "fetched_at.desc"})
+    latest = {}
+    for m in metrics:
+        if m["video_id"] not in latest:
+            latest[m["video_id"]] = m.get("views") or 0
+    buckets = {}
+    for p in pubs:
+        v = latest.get(p["video_id"])
+        if v is None:
+            continue
+        try:
+            hour = datetime.fromisoformat(str(p["published_at"]).replace("Z", "+00:00")).hour
+        except Exception:
+            continue
+        buckets.setdefault(hour, []).append(v)
+    avgs = {h: sum(vs) / len(vs) for h, vs in buckets.items() if len(vs) >= 2}
+    if not avgs:
+        return None
+    return max(avgs, key=avgs.get)
+
+def get_channel_metrics(cid):
+    """Últimas métricas conocidas por video de un canal (para detectar qué
+    sobre-rindió y proponer un repurpose). Solo videos con al menos un snapshot."""
+    videos = _get("videos", {"channel_id": f"eq.{cid}", "select": "id,title,type,repurposed"})
+    by_id = {v["id"]: v for v in videos}
+    metrics = _get("video_metrics", {"select": "video_id,views,fetched_at", "order": "fetched_at.desc"})
+    latest = {}
+    for m in metrics:
+        vid = m["video_id"]
+        if vid in by_id and vid not in latest:
+            latest[vid] = m.get("views") or 0
+    out = []
+    for vid, views in latest.items():
+        v = by_id[vid]
+        out.append({"video_id": vid, "title": v.get("title"), "type": v.get("type"),
+                    "repurposed": v.get("repurposed"), "views": views})
+    return out
+
+def get_video(vid):
+    rows = _get("videos", {"id": f"eq.{vid}", "select": "*"})
+    return rows[0] if rows else None
+
+def add_ab_sibling(cid, vtype, user_script, ab_group_id):
+    """Crea el video 'hermano' de un test A/B de hooks: mismo cuerpo/tema, hook
+    distinto, forzado a publicarse como reel de prueba para comparar cuál engancha
+    más (mismo contenido, solo cambia el gancho de los primeros segundos)."""
+    return _post("videos", {"channel_id": cid, "type": vtype, "status": "pending",
+                            "user_script": user_script, "ab_group_id": ab_group_id,
+                            "force_trial": True})[0]
 
 def enqueue_video(cid, vtype, title=None):
     return _post("videos", {"channel_id": cid, "type": vtype,
