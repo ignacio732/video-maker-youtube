@@ -7,7 +7,7 @@ Uso:
   python worker.py            # procesa la cola + autopiloto de canales
   python worker.py --no-auto  # solo procesa lo que ya está en cola
 """
-import os, sys, tempfile, traceback, subprocess, math
+import os, sys, tempfile, traceback, subprocess, math, uuid
 from datetime import datetime, timezone
 import db, render, trends, requests, re as _re
 
@@ -223,6 +223,27 @@ def process_video(v):
                         description=data.get("description"), tags=data.get("tags", []))
         db.log("script", f"Guion listo: {data['title']}", vid=vid, cid=ch["id"])
 
+        # A/B de hooks: si el canal lo tiene activado, genera un video "hermano" con
+        # el mismo cuerpo pero un hook distinto, y fuerza a ambos a salir como reel
+        # de prueba (además del cupo normal de trial_reels_per_day) para comparar cuál
+        # engancha más. Solo para guiones generados por IA (no un guion propio subido a
+        # mano) y solo una vez por video (no encadenar hermanos de hermanos).
+        if (ch.get("ab_hook_testing_enabled") and vtype == "short"
+                and not us_raw and not v.get("ab_group_id")):
+            try:
+                alt = llm.alt_hook(data, ch)
+                if alt:
+                    group_id = str(uuid.uuid4())
+                    db.update_video(vid, ab_group_id=group_id, force_trial=True)
+                    body = " ".join(s.get("text", "") for s in data["segments"][1:]) or data["full_text"]
+                    sibling_script = (f"Hook: {alt}\nGuion de voz: {body}\n"
+                                     f"Miniatura: {(data.get('thumbnail_text') or data['title'])[:28]}")
+                    db.add_ab_sibling(ch["id"], vtype, sibling_script, group_id)
+                    db.log("ab_test", f"Hook alternativo generado, hermano encolado: \"{alt[:60]}\"",
+                          vid=vid, cid=ch["id"])
+            except Exception as e:
+                db.log("ab_test", f"No se pudo generar el hermano A/B: {e}", "warn", vid, ch["id"])
+
         # 2) VOZ + timings
         db.set_status(vid, "voicing")
         mp3 = os.path.join(td, "voz.mp3")
@@ -433,11 +454,17 @@ def publish_video(vid, ch, data, video_url, thumb_url, manual=False, vtype="shor
     # Reels de prueba (Instagram): el canal define a mano cuántos por día quiere
     # (trial_reels_per_day, sin tope fijo del sistema) y con qué estrategia de
     # graduación. Si todavía no se llegó al tope de hoy, este video sale como trial.
+    # Un video de un test A/B de hooks (force_trial) SIEMPRE sale como trial, sin
+    # contar contra ese cupo diario — es una prueba deliberada, no el cupo normal.
     use_trial = False
-    if ch.get("trial_reels_enabled") and vtype == "short":
-        per_day = int(ch.get("trial_reels_per_day") or 0)
-        if per_day > 0 and db.count_trial_reels_today(ch["id"]) < per_day:
+    if vtype == "short":
+        vrow = db.get_video(vid) or {}
+        if vrow.get("force_trial"):
             use_trial = True
+        elif ch.get("trial_reels_enabled"):
+            per_day = int(ch.get("trial_reels_per_day") or 0)
+            if per_day > 0 and db.count_trial_reels_today(ch["id"]) < per_day:
+                use_trial = True
 
     for a in accts:
         plat, acc = a["platform"], a["accountId"]
@@ -528,14 +555,29 @@ def _publish_next_ready(ch, vtype, per, days, last_field):
     interval_h = 24.0 * days / per
     last = ch.get(last_field)
     due = True
+    last_dt = None
     if last:
         try:
             last_dt = datetime.fromisoformat(str(last).replace("Z", "+00:00"))
-            due = (datetime.now(timezone.utc) - last_dt).total_seconds() / 3600.0 >= interval_h
+            elapsed_h = (datetime.now(timezone.utc) - last_dt).total_seconds() / 3600.0
+            due = elapsed_h >= interval_h
         except Exception:
             due = True
+            elapsed_h = None
     if not due:
         return
+    # Sesgo suave por "mejor horario": si ya hay suficiente historial de vistas por
+    # hora de publicación, espera a esa ventana (±2h) en vez de publicar apenas se
+    # cumple el intervalo — salvo que ya se pase 1.5x el intervalo (para no trabarse
+    # esperando el horario ideal si algo lo corrió). Sin datos suficientes, publica
+    # como siempre (por elapsed time nomás).
+    best_h = db.best_hour_utc(ch["id"])
+    if best_h is not None and last_dt is not None and elapsed_h is not None \
+       and elapsed_h < interval_h * 1.5:
+        now_h = datetime.now(timezone.utc).hour
+        gap = min((now_h - best_h) % 24, (best_h - now_h) % 24)
+        if gap > 2:
+            return  # todavía no es la hora que mejor rinde para este canal — esperar
     # Varios candidatos (no solo 1): si el más viejo está roto (sin video_url, ej. una
     # fila que quedó mal por algún corte a mitad de proceso), antes se reintentaba
     # SIEMPRE el mismo roto cada 15 min y nunca se avanzaba, bloqueando el canal entero.
@@ -626,6 +668,28 @@ def sync_analytics():
     if matched:
         db.log("analytics", f"Sincronizadas métricas de {matched} publicación(es)")
 
+def _repurpose_overperformers():
+    """Si un video superó por mucho el promedio de vistas de su canal (2.5x, con
+    muestra mínima), encola una variante nueva sobre el mismo ángulo — para
+    aprovechar lo que ya demostró que funciona en vez de solo notarlo."""
+    for ch in db.get_active_channels():
+        rows = db.get_channel_metrics(ch["id"])
+        if len(rows) < 4:
+            continue
+        avg = sum(r["views"] for r in rows) / len(rows)
+        if avg <= 0:
+            continue
+        for r in rows:
+            if r.get("repurposed") or (r["views"] or 0) < avg * 2.5:
+                continue
+            seed = f"Otro ángulo sobre este tema, que ya funcionó muy bien antes: {r['title']}"
+            db.enqueue_video(ch["id"], r.get("type") or "short", title=seed)
+            db.update_video(r["video_id"], repurposed=True)
+            db.log("boost",
+                   f"'{r['title']}' hizo {r['views']} vistas ({r['views']/avg:.1f}x el promedio "
+                   f"del canal) — se encoló una variante del mismo ángulo",
+                   cid=ch["id"])
+
 def main():
     if "--no-auto" not in sys.argv:
         try:
@@ -640,6 +704,10 @@ def main():
             sync_analytics()
         except Exception as e:
             db.log("analytics", f"Error: {e}", "error")
+        try:
+            _repurpose_overperformers()
+        except Exception as e:
+            db.log("boost", f"Error: {e}", "error")
         refresh_global_trends()
 
     pend = db.get_pending_videos(MAX_VIDEOS)
