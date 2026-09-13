@@ -30,8 +30,10 @@ def list_accounts(api_key):
 # Plataformas verticales (reel/short). Un video horizontal (long) no va acá.
 VERTICAL_PLATFORMS = ("tiktok", "instagram", "facebook")
 
-def _target(platform, title, privacy, thumbnail_url, ai=True, page_id=None):
-    """Arma el objeto 'target' según los campos que pide cada plataforma."""
+def _target(platform, title, privacy, thumbnail_url, ai=True, page_id=None, trial=None):
+    """Arma el objeto 'target' según los campos que pide cada plataforma.
+    `trial` (solo Instagram): dict {"graduationStrategy": "MANUAL"|"SS_PERFORMANCE"} para
+    publicar como Reel de prueba (solo no-seguidores) en vez de al feed normal."""
     if platform == "youtube":
         t = {
             "targetType": "youtube",
@@ -52,23 +54,28 @@ def _target(platform, title, privacy, thumbnail_url, ai=True, page_id=None):
             "isBrandedContent": False, "isYourBrand": False, "isAiGenerated": bool(ai),
         }
     if platform == "instagram":
-        return {"targetType": "instagram", "mediaType": "reel"}
+        t = {"targetType": "instagram", "mediaType": "reel"}
+        if trial:
+            t["trial"] = trial
+        return t
     if platform == "facebook":
         return {"targetType": "facebook", "pageId": str(page_id or ""), "mediaType": "reel"}
     return {"targetType": platform}
 
 def publish(api_key, platform, account_id, video_url, title, description,
-            privacy="public", thumbnail_url=None, ai_generated=True):
+            privacy="public", thumbnail_url=None, ai_generated=True, trial=None):
     """
     Publica un video en una plataforma (youtube/tiktok/instagram/facebook) vía Blotato.
     Devuelve el JSON de respuesta. Lanza excepción si falla.
+
+    `trial` (solo tiene efecto en instagram): ver _target().
 
     YouTube exige el canal verificado por teléfono para aceptar thumbnailUrl por API:
     si Blotato rechaza por eso, se reintenta UNA vez sin miniatura personalizada en vez
     de perder la publicación entera (YouTube pone una miniatura automática).
     """
     def _post(thumb):
-        target = _target(platform, title, privacy, thumb, ai_generated, page_id=account_id)
+        target = _target(platform, title, privacy, thumb, ai_generated, page_id=account_id, trial=trial)
         body = {"post": {
             "accountId": str(account_id),
             "content": {"text": description or title or "", "mediaUrls": [video_url], "platform": platform},
