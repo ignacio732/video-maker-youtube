@@ -107,6 +107,44 @@ def get_top_performers(cid, limit=3, min_views=1):
                     "views": r.get("views"), "likes": r.get("likes"), "comments": r.get("comments")})
     return out[:limit]
 
+# ---- Historial de publicaciones (por canal, por red, por video) ----
+def add_publication(video_id, channel_id, platform, account_id, is_trial=False,
+                    status="ok", post_url=None, error=None):
+    """Registra un intento de publicación (éxito o falla) de un video en una red
+    puntual — esto es lo que arma el historial 'qué se publicó, cuándo y en qué
+    red' por canal, algo que antes solo quedaba disperso en el log de texto."""
+    return _post("video_publications", {
+        "video_id": video_id, "channel_id": channel_id, "platform": platform,
+        "account_id": str(account_id) if account_id else None, "is_trial": bool(is_trial),
+        "status": status, "post_url": post_url, "error": error,
+    })
+
+def get_publications(channel_id, limit=100):
+    """Historial de publicaciones de un canal, más recientes primero, con el
+    título/tipo del video y las últimas métricas ya sincronizadas (si las hay)."""
+    return _get("video_publications", {
+        "channel_id": f"eq.{channel_id}", "select": "*,videos(title,type)",
+        "order": "published_at.desc", "limit": str(limit)})
+
+def get_unresolved_publications(limit=200):
+    """Publicaciones exitosas todavía sin id de analytics de Blotato (blotato_post_id
+    null) — candidatas a resolver en la próxima sincronización."""
+    return _get("video_publications", {
+        "status": "eq.ok", "blotato_post_id": "is.null",
+        "select": "id,video_id,platform,post_url,published_at",
+        "order": "published_at.desc", "limit": str(limit)})
+
+def resolve_publication(pub_id, blotato_post_id):
+    return _patch("video_publications", {"id": f"eq.{pub_id}"}, {"blotato_post_id": blotato_post_id})
+
+def add_video_metric(video_id, views=None, likes=None, comments=None, source="blotato"):
+    """Guarda un snapshot de métricas de un video (alimenta get_top_performers y
+    get_visual_learnings, que hasta ahora no tenían de dónde leer datos reales)."""
+    return _post("video_metrics", {
+        "video_id": video_id, "views": views, "likes": likes, "comments": comments,
+        "source": source,
+    })
+
 def enqueue_video(cid, vtype, title=None):
     return _post("videos", {"channel_id": cid, "type": vtype,
                             "status": "pending", "title": title})[0]
