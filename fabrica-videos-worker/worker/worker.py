@@ -429,6 +429,16 @@ def publish_video(vid, ch, data, video_url, thumb_url, manual=False, vtype="shor
     privacy = ch.get("yt_privacy") or "public"
     db.set_status(vid, "publishing")
     ok_any, yt_url = False, None
+
+    # Reels de prueba (Instagram): el canal define a mano cuántos por día quiere
+    # (trial_reels_per_day, sin tope fijo del sistema) y con qué estrategia de
+    # graduación. Si todavía no se llegó al tope de hoy, este video sale como trial.
+    use_trial = False
+    if ch.get("trial_reels_enabled") and vtype == "short":
+        per_day = int(ch.get("trial_reels_per_day") or 0)
+        if per_day > 0 and db.count_trial_reels_today(ch["id"]) < per_day:
+            use_trial = True
+
     for a in accts:
         plat, acc = a["platform"], a["accountId"]
         # Un video horizontal (long) no va a plataformas verticales (reels/shorts)
@@ -436,17 +446,24 @@ def publish_video(vid, ch, data, video_url, thumb_url, manual=False, vtype="shor
             db.log("publish", f"{plat}: se omite (video horizontal, esa plataforma es vertical)",
                    "info", vid, ch["id"])
             continue
+        trial = None
+        if plat == "instagram" and use_trial:
+            trial = {"graduationStrategy": ch.get("trial_graduation_strategy") or "MANUAL"}
         try:
             resp = blotato.publish(api_key, plat, acc, video_url,
                                    title=data.get("title"), description=data.get("description"),
-                                   privacy=privacy, thumbnail_url=thumb_url, ai_generated=True)
+                                   privacy=privacy, thumbnail_url=thumb_url, ai_generated=True,
+                                   trial=trial)
             url, _ = blotato.extract_url(resp)
             if plat == "youtube":
                 yt_url = url
             ok_any = True
             fb = " [sin miniatura personalizada: cuenta no verificada por teléfono]" if resp.get("_thumbnail_fallback") else ""
-            db.log("publish", f"Publicado en {plat} (cuenta {acc})" + (f": {url}" if url else " ✓") + fb,
+            trial_note = f" — REEL DE PRUEBA ({trial['graduationStrategy']})" if trial else ""
+            db.log("publish", f"Publicado en {plat} (cuenta {acc})" + (f": {url}" if url else " ✓") + fb + trial_note,
                    vid=vid, cid=ch["id"])
+            if trial:
+                db.update_video(vid, published_as_trial=True)
         except Exception as e:
             db.log("publish", f"{plat} (cuenta {acc}) falló: {e}", "warn", vid, ch["id"])
     if ok_any:
