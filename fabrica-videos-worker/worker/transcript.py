@@ -13,7 +13,11 @@ UA = {"User-Agent": "Mozilla/5.0"}
 def _ydl_opts(**extra):
     import yt_dlp
     opts = {"quiet": True, "no_warnings": True, "skip_download": True,
-            "nocheckcertificate": True}
+            "nocheckcertificate": True,
+            # El cliente "web" (default) es al que más le exige YouTube el chequeo
+            # "confirm you're not a bot" en IPs de datacenter (GitHub Actions incluido).
+            # android/tv lo evitan la mayoría de las veces, sin necesitar cookies.
+            "extractor_args": {"youtube": {"player_client": ["android", "tv", "web"]}}}
     opts.update(extra)
     return opts
 
