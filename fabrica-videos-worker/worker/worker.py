@@ -125,7 +125,7 @@ def process_video(v):
         db.set_status(vid, "scripting")
         import llm
         us_raw = (v.get("user_script") or "").strip()
-        reference_url = None
+        reference_url = v.get("source_url")  # heredada si es un hermano de A/B (ver add_ab_sibling)
         if us_raw:
             narracion, shot_list, thumb_text, own_desc = parse_user_script(us_raw)
             title = v.get("title") or narracion.split("\n")[0][:70]
@@ -246,7 +246,7 @@ def process_video(v):
                     body = " ".join(s.get("text", "") for s in data["segments"][1:]) or data["full_text"]
                     sibling_script = (f"Hook: {alt}\nGuion de voz: {body}\n"
                                      f"Miniatura: {(data.get('thumbnail_text') or data['title'])[:28]}")
-                    db.add_ab_sibling(ch["id"], vtype, sibling_script, group_id)
+                    db.add_ab_sibling(ch["id"], vtype, sibling_script, group_id, source_url=reference_url)
                     db.log("ab_test", f"Hook alternativo generado, hermano encolado: \"{alt[:60]}\"",
                           vid=vid, cid=ch["id"])
             except Exception as e:
