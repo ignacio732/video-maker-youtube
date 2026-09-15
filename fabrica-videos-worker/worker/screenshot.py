@@ -74,22 +74,31 @@ def capture(url, out_path, width=1080, height=1350, wait_ms=2500, timeout_ms=200
                         break
                     except Exception:
                         pass
-                # Preferir un recorte del titular/nota real; si no aparece ninguno,
-                # cae a la captura del viewport tal cual.
-                target = page
+                # Preferir la zona del titular, pero capturando el VIEWPORT completo
+                # ahí (no solo el recuadro del texto) — así entra también la imagen de
+                # portada o lo que sigue debajo. Un recorte de puro texto queda
+                # borroso y gigante cuando el render le aplica el efecto Ken Burns
+                # (pensado para fotos, no para una tira de texto).
+                found_headline = False
                 for sel in _ARTICLE_SELECTORS:
                     try:
                         el = page.locator(sel).first
                         if el.count() > 0 and el.is_visible(timeout=1000):
                             box = el.bounding_box()
-                            if box and box["height"] > 60:
-                                el.scroll_into_view_if_needed(timeout=1500)
+                            if box and box["height"] > 20:
+                                # Scrollear un poco POR ARRIBA del titular (no justo
+                                # encima) para que el viewport capturado incluya
+                                # titular + imagen/contenido de abajo, no quede el
+                                # titular pegado al borde superior.
+                                page.evaluate(
+                                    "(y) => window.scrollTo(0, Math.max(0, y - 40))",
+                                    box["y"] + page.evaluate("window.scrollY"))
                                 page.wait_for_timeout(300)
-                                target = el
+                                found_headline = True
                                 break
                     except Exception:
                         continue
-                target.screenshot(path=out_path)
+                page.screenshot(path=out_path, full_page=full_page)
             finally:
                 browser.close()
         return out_path if os.path.exists(out_path) else None
