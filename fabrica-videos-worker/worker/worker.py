@@ -173,6 +173,50 @@ def process_video(v):
             db.log("script", "Usando guion propio del usuario"
                    + (" (con plano y edición separado)" if shot_list else ""),
                    vid=vid, cid=ch["id"])
+        elif v.get("remix_of") or v.get("remix_query"):
+            # "Remix" de un video viral de referencia: mismo tema y mismo ritmo de
+            # hook que el original, pero un guion nuevo (ver llm.remix_script). Si
+            # algo falla acá (sin subtítulos, sin resultados de búsqueda), se cae al
+            # camino normal de generación por IA en vez de perder el video.
+            import transcript
+            data = None
+            try:
+                src_url = v.get("remix_of")
+                if not src_url:
+                    kind = v.get("remix_kind") or vtype
+                    min_views = v.get("remix_min_views") or 1_000_000
+                    candidates = transcript.search_videos(v["remix_query"], kind=kind,
+                                                          min_views=min_views, max_results=5)
+                    if not candidates:
+                        db.log("remix", f"Sin resultados con >= {min_views:,} vistas para "
+                                       f"\"{v['remix_query']}\"; se genera normal", "warn", vid, ch["id"])
+                    else:
+                        src_url = candidates[0]["url"]
+                        db.log("remix", f"Elegido: \"{candidates[0]['title']}\" "
+                                       f"({candidates[0]['view_count']:,} vistas)", vid=vid, cid=ch["id"])
+                if src_url:
+                    info = transcript.get_video_info(src_url)
+                    lang = (ch.get("language") or "es")
+                    langs = (lang, "es", "es-419", "en") if lang != "en" else ("en", "es")
+                    segs = transcript.extract_transcript(src_url, langs=langs)
+                    if not segs:
+                        db.log("remix", f"El video de referencia no tiene subtítulos disponibles "
+                                       f"({src_url}); se genera normal", "warn", vid, ch["id"])
+                    else:
+                        data = llm.remix_script(ch, vtype, info["title"] if info else "",
+                                               info["view_count"] if info else 0, segs)
+                        reference_url = src_url  # también le saca captura real al hook (ver más abajo)
+                        db.log("remix", f"Guion remixado sobre \"{(info or {}).get('title', src_url)}\"",
+                              vid=vid, cid=ch["id"])
+            except Exception as e:
+                db.log("remix", f"Falló el remix ({e}); se genera normal", "warn", vid, ch["id"])
+            if data is None:
+                # Fallback: generación normal, usando el título original como semilla si lo tenemos.
+                recent_titles = db.get_recent_titles(ch["id"], 40)
+                top_performers = db.get_top_performers(ch["id"], 3)
+                visual_learning = db.get_visual_learnings(ch["id"])
+                data = llm.generate(ch, vtype, seed_title=v.get("title"), recent_titles=recent_titles,
+                                    top_performers=top_performers, visual_learning=visual_learning)
         else:
             trend_topics = None
             reference_url = None
