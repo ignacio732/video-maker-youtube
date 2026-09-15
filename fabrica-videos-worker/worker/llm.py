@@ -380,6 +380,82 @@ def alt_hook(data, channel):
     alt = (_extract_json(raw).get("hook") or "").strip()
     return alt if alt and alt.lower() != original.strip().lower() else None
 
+def remix_script(channel, vtype, original_title, original_views, original_segments):
+    """
+    'Remix' de un video viral de referencia: mismo tema y mismo ritmo/timing de hook
+    que el original, pero un guion nuevo, en palabras propias (nunca una reescritura
+    línea por línea) — devuelve el mismo formato que generate() para que fluya por
+    el pipeline normal (voz, visuales, render) sin cambios.
+    """
+    hook_dur = original_segments[0]["duration"] if original_segments else None
+    orig_text = " ".join(s["text"] for s in original_segments)[:3500]
+    hook_note = (f"El gancho original dura ~{hook_dur:.1f}s — el tuyo debería durar algo similar "
+                f"(ni mucho más largo ni mucho más corto), mismo nivel de energía/urgencia.\n"
+                if hook_dur else "")
+    if vtype == "short":
+        dur, seg_hint = "18 a 28 segundos", "6 a 8 segmentos. Cada 'text' = UNA frase corta (8-12 palabras)."
+    else:
+        dur, seg_hint = "4 a 7 minutos", "14 a 20 segmentos, un giro/dato nuevo cada 5-7 segundos."
+    brand = (channel.get("brand_hashtag") or "").strip()
+    brand_line = f'Hashtag de MARCA (incluilo SIEMPRE): #{brand}.\n' if brand else ""
+    prompt = f"""Canal: {channel['name']}
+Nicho: {channel['niche']}
+Tono: {channel.get('tone') or 'informativo'}
+Formato del video: {vtype} — duración objetivo {dur}.
+
+{_language_note(channel)}
+
+VIDEO DE REFERENCIA (viral, {original_views:,} vistas): "{original_title}"
+Transcripción real de ese video (para que saques el TEMA y el RITMO, nunca para copiarla
+palabra por palabra — el guion final tiene que ser tuyo, reescrito de cero):
+---
+{orig_text}
+---
+{hook_note}
+Tu tarea: escribir un guion NUEVO y ORIGINAL sobre el MISMO tema/ángulo que el video de
+referencia, imitando su ritmo (duración del gancho, cadencia de frases cortas, dónde
+mete el giro), pero con palabras propias — no una traducción ni una reescritura
+línea por línea del original. Adaptalo a la identidad de "{channel['name']}" y su
+{brand_line}
+Devolvé SOLO un JSON con esta forma EXACTA:
+{{
+  "title": "titulo-pregunta o con numero, <=60 caracteres",
+  "hook": "la primera frase, el gancho potente",
+  "description": "1 frase que responde + contexto + #hashtag1 #hashtag2 #hashtag3",
+  "tags": ["10 a 15 tags/keywords relevantes"],
+  "hashtags": ["3 hashtags sin #"],
+  "thumbnail_text": "2 a 4 PALABRAS en mayusculas para la miniatura",
+  "format": "uno de: datos_curiosos | ranking | historia | motivacion | quiz | explicacion",
+  "visual_subject": "EN INGLES: el sujeto visual central y CONCRETO del video en 1-3 palabras.",
+  "segments": [
+    {{"text": "frase narrada corta",
+      "keywords": ["2-3 terminos EN INGLES, cosas FISICAS y FILMABLES que ilustren esta frase"],
+      "image_prompt": "EN INGLES: descripcion visual concreta de UNA escena. Sin texto en la imagen."}}
+  ]
+}}
+{seg_hint}
+Keywords SIEMPRE en inglés, concretas y filmables (nada abstracto)."""
+    messages = [{"role": "system", "content": SYSTEM}, {"role": "user", "content": prompt}]
+    raw = _gemini(messages) if PROVIDER == "gemini" else _groq(messages)
+    data = _extract_json(raw)
+    data.setdefault("tags", [])
+    data.setdefault("hashtags", [])
+    if brand:
+        low = [h.lower().lstrip("#") for h in data["hashtags"]]
+        if brand.lower() not in low:
+            data["hashtags"].insert(0, brand)
+    data.setdefault("thumbnail_text", (data.get("title") or "")[:24])
+    data.setdefault("format", "datos_curiosos")
+    if not (data.get("visual_subject") or "").strip():
+        data["visual_subject"] = (data.get("title") or channel.get("niche") or "")[:60]
+    subj = data.get("visual_subject") or ""
+    for s in data.get("segments", []):
+        if not (s.get("image_prompt") or "").strip():
+            kws = ", ".join(s.get("keywords") or [])
+            s["image_prompt"] = (f"{kws}, {subj}".strip(", ") or subj or s.get("text", ""))[:300]
+    data["full_text"] = " ".join(s["text"].strip() for s in data.get("segments", []))
+    return data
+
 def generate(channel, vtype="short", seed_title=None, trends=None, recent_titles=None,
             top_performers=None, visual_learning=None, research_context=None):
     """Devuelve dict con title, hook, description, tags, hashtags, thumbnail_text, format, segments."""
