@@ -125,6 +125,7 @@ def process_video(v):
         db.set_status(vid, "scripting")
         import llm
         us_raw = (v.get("user_script") or "").strip()
+        reference_url = None
         if us_raw:
             narracion, shot_list, thumb_text, own_desc = parse_user_script(us_raw)
             title = v.get("title") or narracion.split("\n")[0][:70]
@@ -174,6 +175,7 @@ def process_video(v):
                    vid=vid, cid=ch["id"])
         else:
             trend_topics = None
+            reference_url = None
             if not v.get("title"):
                 try:
                     found = trends.for_channel(ch, 8)
@@ -182,6 +184,11 @@ def process_video(v):
                         db.add_trend(ch["id"], t["topic"], t["source"], t.get("category"), t.get("url"))
                     cats = ", ".join(sorted(set(t.get("category") or "" for t in found[:5])))
                     db.log("trends", f"{len(trend_topics)} tendencias ({cats})", vid=vid, cid=ch["id"])
+                    # Canal de sitios de referencia (noticias reales): guardamos la URL de la
+                    # nota más relevante para, más abajo, sacarle una captura real de pantalla
+                    # y mezclarla con el resto del material del video (autenticidad).
+                    if ch.get("reference_sites") and found and found[0].get("url"):
+                        reference_url = found[0]["url"]
                 except Exception as e:
                     db.log("trends", f"sin tendencias: {e}", "warn", vid, ch["id"])
             data = None
@@ -196,6 +203,7 @@ def process_video(v):
                 trend_row = db.get_trend(v["seed_trend_id"])
                 if trend_row and trend_row.get("url"):
                     research_context = trends.fetch_article_text(trend_row["url"])
+                    reference_url = trend_row["url"]
                     db.log("trends",
                            "Investigación real del artículo OK" if research_context
                            else "No se pudo leer el artículo original (paywall o formato no soportado); "
@@ -321,6 +329,29 @@ def process_video(v):
                     visuals.fill_gaps(visual_list, segs, seg_durations, subject, td, vtype, w, h)
                 except Exception as e:
                     db.log("visuals", f"stock de respaldo falló: {e}", "warn", vid, ch["id"])
+
+            # 3) Captura real de la fuente (autenticidad): si el video sale de una
+            # noticia puntual (reference_sites o tendencia elegida a mano), sacamos
+            # UNA captura de pantalla real de esa página y la ponemos en el hook —
+            # mezclada con el resto del material (stock/IA), no en reemplazo de todo.
+            if reference_url and visual_list:
+                try:
+                    import screenshot
+                    shot_path = os.path.join(td, "shot_0.png")
+                    got = screenshot.capture(reference_url, shot_path,
+                                            width=w, height=h if vtype == "short" else int(w * 9 / 16))
+                    if got:
+                        visual_list[0] = {"type": "image", "path": got, "source": "screenshot",
+                                          "ref": reference_url[:120]}
+                        db.update_video(vid, source_url=reference_url)
+                        db.log("visuals", f"Captura real de la fuente OK: {reference_url}",
+                               vid=vid, cid=ch["id"])
+                    else:
+                        db.log("visuals", f"No se pudo capturar la fuente ({reference_url}); "
+                                          "se sigue con el resto del material normal",
+                               "warn", vid, ch["id"])
+                except Exception as e:
+                    db.log("visuals", f"Captura de pantalla falló: {e}", "warn", vid, ch["id"])
 
         n_vid = sum(1 for x in visual_list if x.get("type") == "video")
         n_img = sum(1 for x in visual_list if x.get("type") == "image")
