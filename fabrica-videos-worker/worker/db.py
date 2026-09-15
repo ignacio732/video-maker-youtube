@@ -214,6 +214,20 @@ def enqueue_video(cid, vtype, title=None):
     return _post("videos", {"channel_id": cid, "type": vtype,
                             "status": "pending", "title": title})[0]
 
+def enqueue_remix(cid, vtype, remix_of=None, remix_query=None, remix_kind=None,
+                  remix_min_views=1_000_000):
+    """Encola un video 'remix' de un video viral de referencia: o bien una URL
+    puntual (remix_of), o una búsqueda por tema con filtro de vistas mínimas
+    (remix_query + remix_kind) que el worker resuelve solo en process_video()."""
+    row = {"channel_id": cid, "type": vtype, "status": "pending"}
+    if remix_of:
+        row["remix_of"] = remix_of
+    if remix_query:
+        row["remix_query"] = remix_query
+        row["remix_kind"] = remix_kind or vtype
+        row["remix_min_views"] = remix_min_views
+    return _post("videos", row)[0]
+
 def update_video(vid, **fields):
     return _patch("videos", {"id": f"eq.{vid}"}, fields)
 
