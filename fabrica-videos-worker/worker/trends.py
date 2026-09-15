@@ -334,9 +334,18 @@ _KNOWN_FEEDS = {
         "https://www.ambito.com/rss/economia.xml",
         "https://www.ambito.com/rss/negocios.xml",
     ],
+    "genbeta.com": [
+        "https://www.genbeta.com/tag/inteligencia-artificial/rss2.xml",
+        "https://www.genbeta.com/rss2.xml",
+    ],
+    "xataka.com": [
+        "https://www.xataka.com/tag/inteligencia-artificial/rss2.xml",
+        "https://www.xataka.com/rss2.xml",
+    ],
 }
 # Rutas genéricas a probar en dominios sin feed conocido.
-_GENERIC_FEED_PATHS = ["/rss/home.xml", "/rss.xml", "/feed", "/feed/", "/rss", "/rss/"]
+_GENERIC_FEED_PATHS = ["/rss/home.xml", "/rss.xml", "/rss2.xml", "/feed", "/feed/", "/rss", "/rss/",
+                      "/feed.xml", "/index.xml", "/rss/index.xml", "/feeds/posts/default"]
 
 def _domain(url):
     return re.sub(r"^https?://(www\.)?", "", url).split("/")[0].lower()
@@ -395,6 +404,49 @@ def scrape_headlines(url, maxn=8):
     except Exception:
         return []
 
+def fetch_sitemap_urls(base, limit=8):
+    """Último recurso cuando un sitio no tiene RSS ni headlines scrapeables (ej. una
+    SPA como cronista.com): lee su sitemap.xml (casi siempre server-side, incluso en
+    sitios armados con JS) y devuelve las URLs más recientes por <lastmod>. El
+    'titular' sale del slug de la URL — es aproximado, pero real y sirve como pie
+    para el LLM y como candidato a captura de pantalla real."""
+    candidates = ["/sitemap.xml", "/sitemap_index.xml", "/sitemap-index.xml", "/news-sitemap.xml"]
+    for path in candidates:
+        try:
+            r = requests.get(base.rstrip("/") + path, headers=UA, timeout=15)
+            if r.status_code != 200 or "<" not in r.text[:50]:
+                continue
+            r.encoding = "utf-8"
+            root = ET.fromstring(r.text)
+            urls = []
+            # sitemap índice (apunta a otros sitemaps) -> seguimos el más reciente
+            sub = [e.findtext("{*}loc") for e in root.findall(".//{*}sitemap")]
+            sub = [s for s in sub if s]
+            if sub:
+                try:
+                    r2 = requests.get(sub[0], headers=UA, timeout=15)
+                    r2.encoding = "utf-8"
+                    root = ET.fromstring(r2.text)
+                except Exception:
+                    continue
+            for e in root.findall(".//{*}url")[:limit * 3]:
+                loc = e.findtext("{*}loc")
+                lastmod = e.findtext("{*}lastmod") or ""
+                if loc:
+                    urls.append((lastmod, loc))
+            urls.sort(key=lambda x: x[0], reverse=True)
+            out = []
+            for _, loc in urls[:limit]:
+                slug = loc.rstrip("/").split("/")[-1].replace("-", " ").replace("_", " ")
+                slug = re.sub(r"\.(html?|aspx?)$", "", slug, flags=re.IGNORECASE).strip()
+                if len(slug) > 12:
+                    out.append({"title": slug, "url": loc})
+            if out:
+                return out
+        except Exception:
+            continue
+    return []
+
 def reference_news(sites, per_site=6):
     """Temas del día para un canal de sitios de referencia puntuales (ej. finanzas
     reales), sin pasar por el filtro de política/economía (acá ES el contenido)."""
@@ -417,6 +469,8 @@ def reference_news(sites, per_site=6):
                     break
         if not found:
             found = scrape_headlines(base, per_site)
+        if not found:
+            found = fetch_sitemap_urls(base, per_site)
         for it in found:
             if not _sensitive(it["title"]):
                 items.append({"topic": it["title"], "url": it.get("url"), "source": dom,
