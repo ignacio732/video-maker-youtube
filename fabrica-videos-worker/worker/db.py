@@ -197,13 +197,18 @@ def get_video(vid):
     rows = _get("videos", {"id": f"eq.{vid}", "select": "*"})
     return rows[0] if rows else None
 
-def add_ab_sibling(cid, vtype, user_script, ab_group_id):
+def add_ab_sibling(cid, vtype, user_script, ab_group_id, source_url=None):
     """Crea el video 'hermano' de un test A/B de hooks: mismo cuerpo/tema, hook
     distinto, forzado a publicarse como reel de prueba para comparar cuál engancha
-    más (mismo contenido, solo cambia el gancho de los primeros segundos)."""
-    return _post("videos", {"channel_id": cid, "type": vtype, "status": "pending",
-                            "user_script": user_script, "ab_group_id": ab_group_id,
-                            "force_trial": True})[0]
+    más (mismo contenido, solo cambia el gancho de los primeros segundos).
+    `source_url`: hereda la URL de la noticia real del video original, para que
+    también le saquemos una captura de pantalla real (si no, el hermano nunca
+    pasaba por ese paso al venir por el camino de "guion propio")."""
+    row = {"channel_id": cid, "type": vtype, "status": "pending",
+           "user_script": user_script, "ab_group_id": ab_group_id, "force_trial": True}
+    if source_url:
+        row["source_url"] = source_url
+    return _post("videos", row)[0]
 
 def enqueue_video(cid, vtype, title=None):
     return _post("videos", {"channel_id": cid, "type": vtype,
