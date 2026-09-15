@@ -342,6 +342,9 @@ _KNOWN_FEEDS = {
         "https://www.xataka.com/tag/inteligencia-artificial/rss2.xml",
         "https://www.xataka.com/rss2.xml",
     ],
+    "sciencedaily.com": [
+        "https://www.sciencedaily.com/rss/health_medicine/fertility.xml",
+    ],
 }
 # Rutas genéricas a probar en dominios sin feed conocido.
 _GENERIC_FEED_PATHS = ["/rss/home.xml", "/rss.xml", "/rss2.xml", "/feed", "/feed/", "/rss", "/rss/",
