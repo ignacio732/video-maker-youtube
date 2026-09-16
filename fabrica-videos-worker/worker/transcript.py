@@ -126,6 +126,58 @@ def _fetch_vtt(url):
     return text if "-->" in text else None
 
 
+def supadata_transcript(url, api_key, lang=None, timeout_s=30):
+    """
+    Red de contención cuando yt-dlp no puede (bloqueo de YouTube): Supadata.ai,
+    100 créditos gratis/mes, no depende de la IP de origen. mode='native' para
+    solo traer subtítulos YA existentes (1 crédito) y nunca generar con IA
+    (2 créditos/minuto — mucho más caro, y no es necesario: si no hay subtítulos
+    nativos, mejor caer al video normal que gastar de más).
+    Devuelve segmentos {start, duration, text} en segundos, o None si no hay.
+    """
+    headers = {"x-api-key": api_key}
+    params = {"url": url, "text": "false", "mode": "native"}
+    if lang:
+        params["lang"] = lang
+    try:
+        r = requests.get("https://api.supadata.ai/v1/transcript", headers=headers,
+                         params=params, timeout=timeout_s)
+    except Exception:
+        return None
+    if r.status_code == 202:
+        job_id = (r.json() or {}).get("jobId")
+        if not job_id:
+            return None
+        import time
+        for _ in range(timeout_s):
+            time.sleep(1)
+            try:
+                jr = requests.get(f"https://api.supadata.ai/v1/transcript/{job_id}",
+                                  headers=headers, timeout=15)
+                jd = jr.json() or {}
+            except Exception:
+                continue
+            if jd.get("status") == "completed":
+                r = jr
+                break
+            if jd.get("status") == "failed":
+                return None
+        else:
+            return None
+    if r.status_code != 200:
+        return None
+    data = r.json() or {}
+    content = data.get("content")
+    if not content:
+        return None
+    segs = []
+    for c in content:
+        segs.append({"start": round(c.get("offset", 0) / 1000, 2),
+                    "duration": round(max(0.1, c.get("duration", 0) / 1000), 2),
+                    "text": (c.get("text") or "").strip()})
+    return [s for s in segs if s["text"]] or None
+
+
 def extract_transcript(url_or_id, langs=("es", "es-419", "es-ES", "en")):
     """Baja los subtítulos (manuales o automáticos) de un video, en el primer
     idioma disponible de `langs`, y los devuelve como segmentos. None si el video
