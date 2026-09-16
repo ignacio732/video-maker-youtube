@@ -29,7 +29,7 @@ def extract_video_id(url_or_id):
     return m.group(1) if m else None
 
 
-def search_videos(query, kind="short", min_views=1_000_000, max_results=8, pool=25):
+def search_videos(query, kind="short", min_views=1_000_000, max_results=8, pool=40):
     """Busca en YouTube (sin API key) y devuelve los candidatos que cumplen el
     filtro de vistas y de duración (short <=180s, long >180s), por vistas
     descendente. `kind='any'` no filtra por duración."""
