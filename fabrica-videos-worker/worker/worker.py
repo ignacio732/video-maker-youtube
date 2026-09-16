@@ -219,7 +219,7 @@ def process_video(v):
                         data = llm.remix_script(ch, vtype, info["title"] if info else "",
                                                info["view_count"] if info else 0, segs)
                         reference_url = cand["url"]  # también le saca captura real al hook
-                        db.log("remix", f"Guion remixado sobre \"{(info or {}).get('title', cand['url'])}\"",
+                        db.log("remix", f"Guion remixado sobre \"{(info or {}).get('title') or cand['url']}\"",
                               vid=vid, cid=ch["id"])
                         break
                     except Exception as e:
