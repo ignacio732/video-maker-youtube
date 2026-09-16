@@ -425,9 +425,21 @@ def process_video(v):
         if not imgs and visual_list:
             db.add_segment_visuals(vid, segs, visual_list)
 
-        # Música: propia del video > default global > MUSIC_PATH
+        # Música: propia del video > biblioteca por estilo del canal > default global > MUSIC_PATH
         music = None
-        murl = v.get("music_url") or (db.get_setting("music_default", {}) or {}).get("url")
+        music_credit = None
+        murl = v.get("music_url")
+        if not murl:
+            mood = ch.get("music_mood") or "curioso"
+            tracks = (db.get_setting("music_library", {}) or {}).get(mood) or []
+            if tracks:
+                import random
+                pick = random.choice(tracks)
+                murl = pick["url"]
+                if pick.get("license") != "CC0":  # CC BY exige crédito (no hablado, en la descripción)
+                    music_credit = f'Music: "{pick["name"]}" by {pick["artist"]} ({pick["license"]}) - {pick["credit_url"]}'
+        if not murl:
+            murl = (db.get_setting("music_default", {}) or {}).get("url")
         if murl:
             try:
                 music = _download(murl, os.path.join(td, "music.mp3"))
@@ -435,6 +447,9 @@ def process_video(v):
                 music = None
         if not music:
             music = os.environ.get("MUSIC_PATH")
+        if music and music_credit:
+            data["description"] = (data.get("description") or "").rstrip() + f"\n\n{music_credit}"
+            db.update_video(vid, description=data["description"])
 
         # 5) RENDER
         db.set_status(vid, "rendering")
