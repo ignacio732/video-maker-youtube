@@ -202,6 +202,17 @@ def process_video(v):
                         info = transcript.get_video_info(cand["url"])
                         segs = transcript.extract_transcript(cand["url"], langs=langs)
                         if not segs:
+                            # yt-dlp no pudo (sin subtítulos o bloqueo de YouTube) —
+                            # último intento con Supadata (100 créditos gratis/mes,
+                            # no depende de la IP) antes de descartar este candidato.
+                            supadata_key = (db.get_secret("supadata_api_key") or {}).get("key")
+                            if supadata_key:
+                                segs = transcript.supadata_transcript(cand["url"], supadata_key,
+                                                                      lang=lang if lang != "es" else None)
+                                if segs:
+                                    db.log("remix", "yt-dlp no pudo; se usó Supadata como red de contención",
+                                          vid=vid, cid=ch["id"])
+                        if not segs:
                             db.log("remix", f"Sin subtítulos disponibles: \"{cand.get('title') or cand['url']}\"",
                                   "warn", vid, ch["id"])
                             continue
