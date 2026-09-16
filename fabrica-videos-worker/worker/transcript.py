@@ -62,14 +62,19 @@ def search_videos(query, kind="short", min_views=1_000_000, max_results=8, pool=
 
 
 def get_video_info(url_or_id):
-    """Metadata de un video puntual (modo 'pegar un link directo')."""
+    """Metadata de un video puntual (modo 'pegar un link directo'). None si
+    yt-dlp no pudo acceder (nunca deja propagar la excepción)."""
     import yt_dlp
     vid = extract_video_id(url_or_id)
     if not vid:
         return None
     url = f"https://www.youtube.com/watch?v={vid}"
-    with yt_dlp.YoutubeDL(_ydl_opts(extract_flat=True)) as ydl:
-        info = ydl.extract_info(url, download=False)
+    try:
+        with yt_dlp.YoutubeDL(_ydl_opts(extract_flat=True)) as ydl:
+            info = ydl.extract_info(url, download=False)
+    except Exception:
+        return {"id": vid, "title": None, "channel": None, "view_count": 0,
+                "duration": 0, "url": url}
     dur = info.get("duration") or 0
     return {
         "id": vid, "title": info.get("title"),
@@ -181,14 +186,19 @@ def supadata_transcript(url, api_key, lang=None, timeout_s=30):
 def extract_transcript(url_or_id, langs=("es", "es-419", "es-ES", "en")):
     """Baja los subtítulos (manuales o automáticos) de un video, en el primer
     idioma disponible de `langs`, y los devuelve como segmentos. None si el video
-    no tiene subtítulos en ninguno de esos idiomas."""
+    no tiene subtítulos en ninguno de esos idiomas O si yt-dlp no pudo acceder al
+    video (bloqueo de YouTube, etc.) — nunca deja propagar la excepción de yt-dlp,
+    porque el llamador necesita un None limpio para poder pasar a Supadata."""
     import yt_dlp
     vid = extract_video_id(url_or_id)
     if not vid:
         return None
     url = f"https://www.youtube.com/watch?v={vid}"
-    with yt_dlp.YoutubeDL(_ydl_opts()) as ydl:
-        info = ydl.extract_info(url, download=False)
+    try:
+        with yt_dlp.YoutubeDL(_ydl_opts()) as ydl:
+            info = ydl.extract_info(url, download=False)
+    except Exception:
+        return None
     tracks = {**(info.get("subtitles") or {}), **(info.get("automatic_captions") or {})}
     for lang in langs:
         for key in tracks:
