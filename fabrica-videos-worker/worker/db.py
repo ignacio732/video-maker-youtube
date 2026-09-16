@@ -170,7 +170,13 @@ def best_hour_utc(cid, min_sample=5):
         except Exception:
             continue
         buckets.setdefault(hour, []).append(v)
-    avgs = {h: sum(vs) / len(vs) for h, vs in buckets.items() if len(vs) >= 2}
+    # Exigir una muestra mínima por hora (no solo >=2): con pocos datos, una hora con
+    # 2 publicaciones de un video que le fue bien por azar le gana a una hora con 15
+    # publicaciones reales — puro ruido estadístico, no una señal real. Ese bug hizo
+    # que el sistema se quedara esperando una "mejor hora" ilusoria y no publicara
+    # nada por más de medio día en eSIM Global.
+    min_per_bucket = max(4, len(pubs) // 6)
+    avgs = {h: sum(vs) / len(vs) for h, vs in buckets.items() if len(vs) >= min_per_bucket}
     if not avgs:
         return None
     return max(avgs, key=avgs.get)
