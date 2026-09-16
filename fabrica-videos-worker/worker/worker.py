@@ -686,6 +686,9 @@ def _publish_next_ready(ch, vtype, per, days, last_field):
         now_h = datetime.now(timezone.utc).hour
         gap = min((now_h - best_h) % 24, (best_h - now_h) % 24)
         if gap > 2:
+            if datetime.now(timezone.utc).minute < 15:  # solo una vez por hora, no cada 15 min
+                db.log("publish", f"{vtype}: esperando la mejor hora para publicar "
+                                  f"(~{best_h}:00 UTC, ahora son las {now_h}:00 UTC)", cid=ch["id"])
             return  # todavía no es la hora que mejor rinde para este canal — esperar
     # Varios candidatos (no solo 1): si el más viejo está roto (sin video_url, ej. una
     # fila que quedó mal por algún corte a mitad de proceso), antes se reintentaba
