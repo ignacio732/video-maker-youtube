@@ -11,6 +11,87 @@ worker.py inserta en el segmento del hook cuando el canal tiene reference_sites
 y se pudo identificar la URL real de la noticia.
 """
 import os
+import re
+import html as _html
+import requests
+
+
+def _download_image(url, out_path, min_width=480, timeout=20):
+    """Baja una imagen a out_path si es válida (existe y no es un placeholder
+    minúsculo). Devuelve out_path o None."""
+    try:
+        r = requests.get(url, timeout=timeout, headers={"User-Agent": "Mozilla/5.0"})
+        if r.status_code != 200 or len(r.content) < 2000:
+            return None
+        from PIL import Image
+        from io import BytesIO
+        im = Image.open(BytesIO(r.content))
+        if im.width < min_width:
+            return None
+        with open(out_path, "wb") as f:
+            f.write(r.content)
+        return out_path
+    except Exception:
+        return None
+
+
+def _youtube_thumbnail(video_id):
+    """La miniatura real de YouTube (la que ya existe, no una captura de la
+    página) — mucho más fiable que screenshotear youtube.com, que además
+    siempre tiene comentarios/recomendados/muro de 'confirmá que no sos un
+    bot' de fondo, nada que sirva como hook."""
+    for quality in ("maxresdefault", "sddefault", "hqdefault"):
+        yield f"https://i.ytimg.com/vi/{video_id}/{quality}.jpg"
+
+
+def get_main_image(url, out_path, min_width=480):
+    """
+    Imagen PRINCIPAL real de la fuente — no una captura de pantalla de la
+    página. Para YouTube: su propia miniatura oficial. Para cualquier otra
+    web: el meta og:image / twitter:image que casi toda nota de prensa trae
+    (la misma imagen que se ve al compartir el link en redes). Esto evita
+    por completo el problema de capturar publicidad, banners de cookies,
+    muros de login o interfaces que no significan nada como hook visual.
+    Devuelve out_path o None (el llamador sigue con el resto del material
+    normal si no hay imagen).
+    """
+    if not url:
+        return None
+    m = re.search(r"(?:v=|youtu\.be/|shorts/|live/)([\w-]{11})", url)
+    if m:
+        for cand_url in _youtube_thumbnail(m.group(1)):
+            got = _download_image(cand_url, out_path, min_width)
+            if got:
+                return got
+        return None
+    try:
+        r = requests.get(url, timeout=20, headers={"User-Agent": "Mozilla/5.0"})
+        if r.status_code != 200:
+            return None
+        page = r.text
+    except Exception:
+        return None
+    img_url = None
+    for pattern in (
+        r'<meta[^>]+property=["\']og:image(?::secure_url)?["\'][^>]+content=["\']([^"\']+)["\']',
+        r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']og:image["\']',
+        r'<meta[^>]+name=["\']twitter:image["\'][^>]+content=["\']([^"\']+)["\']',
+        r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+name=["\']twitter:image["\']',
+    ):
+        found = re.search(pattern, page, re.IGNORECASE)
+        if found:
+            img_url = _html.unescape(found.group(1))
+            break
+    if not img_url:
+        return None
+    if img_url.startswith("//"):
+        img_url = "https:" + img_url
+    elif img_url.startswith("/"):
+        base = re.match(r"https?://[^/]+", url)
+        if base:
+            img_url = base.group(0) + img_url
+    return _download_image(img_url, out_path, min_width)
+
 
 _AD_HOSTS = (
     "doubleclick.net", "googlesyndication.com", "google-analytics.com",
