@@ -415,7 +415,12 @@ palabra por palabra — el guion final tiene que ser tuyo, reescrito de cero):
 Tu tarea: escribir un guion NUEVO y ORIGINAL sobre el MISMO tema/ángulo que el video de
 referencia, imitando su ritmo (duración del gancho, cadencia de frases cortas, dónde
 mete el giro), pero con palabras propias — no una traducción ni una reescritura
-línea por línea del original. Adaptalo a la identidad de "{channel['name']}" y su
+línea por línea del original.
+IMPORTANTE: el tema tiene que ser el mismo que el del video de referencia, SIEMPRE —
+aunque no encaje perfecto con el nicho habitual de "{channel['name']}". No inventes un
+tema distinto (de historia, de otro rubro, etc.) solo porque "suena más del canal": la
+persona elige a propósito qué video remixar en qué canal, y esa decisión no se cambia.
+Sí podés narrarlo con el tono/voz de "{channel['name']}" y su
 {brand_line}
 Devolvé SOLO un JSON con esta forma EXACTA:
 {{
