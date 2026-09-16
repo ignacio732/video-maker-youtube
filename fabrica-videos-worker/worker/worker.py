@@ -7,7 +7,7 @@ Uso:
   python worker.py            # procesa la cola + autopiloto de canales
   python worker.py --no-auto  # solo procesa lo que ya está en cola
 """
-import os, sys, tempfile, traceback, subprocess, math, uuid
+import os, sys, tempfile, traceback, subprocess, math, uuid, random
 from datetime import datetime, timezone
 import db, render, trends, requests, re as _re
 
@@ -220,7 +220,11 @@ def process_video(v):
                             db.update_video(vid, original_transcript=" ".join(s["text"] for s in segs))
                         data = llm.remix_script(ch, vtype, info["title"] if info else "",
                                                info["view_count"] if info else 0, segs)
-                        reference_url = cand["url"]  # también le saca captura real al hook
+                        # Nota: a diferencia de una noticia (donde la foto de portada es
+                        # material editorial neutro), la miniatura de un video de YouTube
+                        # es la imagen de marca de otro creador — no la usamos como hook
+                        # para evitar problemas de autoría/spam. El remix se ilustra con
+                        # el stock/IA normal, como cualquier otro video.
                         db.log("remix", f"Guion remixado sobre \"{(info or {}).get('title') or cand['url']}\"",
                               vid=vid, cid=ch["id"])
                         break
@@ -612,6 +616,39 @@ def publish_video(vid, ch, data, video_url, thumb_url, manual=False, vtype="shor
     db.set_status(vid, "ready", "publicación falló en todas las cuentas")
     return False
 
+def _autopilot_remix(ch):
+    """Remix automático: si el canal lo tiene activado, busca un video viral del
+    nicho del canal y encola un remix al ritmo configurado (ej. 2 por semana o 1
+    por día) — sin que nadie tenga que abrir el modal a mano cada vez."""
+    if not ch.get("auto_remix_enabled"):
+        return
+    count = max(0, ch.get("auto_remix_count") or 0)
+    days = max(1, ch.get("auto_remix_period_days") or 7)
+    if count <= 0:
+        return
+    interval_h = 24.0 * days / count
+    last = ch.get("last_remix_at")
+    if last:
+        try:
+            last_dt = datetime.fromisoformat(str(last).replace("Z", "+00:00"))
+            elapsed_h = (datetime.now(timezone.utc) - last_dt).total_seconds() / 3600.0
+            if elapsed_h < interval_h:
+                return
+        except Exception:
+            pass
+    kws = ch.get("keywords") or []
+    query = random.choice(kws) if kws else (ch.get("niche") or "").split(",")[0].strip()
+    if not query:
+        db.log("autopilot", "Remix automático: canal sin keywords ni nicho para buscar", "warn", cid=ch["id"])
+        return
+    fmt = ch.get("format") or "both"
+    vtype = "long" if fmt == "long" else "short" if fmt == "shorts" else random.choice(["short", "long"])
+    min_views = ch.get("auto_remix_min_views") or 1_000_000
+    db.enqueue_remix(ch["id"], vtype, remix_query=query, remix_kind=vtype, remix_min_views=min_views)
+    db.update_channel(ch["id"], last_remix_at=datetime.now(timezone.utc).isoformat())
+    db.log("autopilot", f"Remix automático encolado: \"{query}\" ({vtype}, mín. {min_views:,} vistas)",
+          cid=ch["id"])
+
 def autopilot():
     """Encola videos según el modo del canal:
        - Modo simple (autonomous=false, default): 1 video en curso por vez, como antes.
@@ -619,6 +656,10 @@ def autopilot():
          ritmo configurado (videos_per_period cada period_days) de forma autoregulada,
          sin depender de que un humano dispare nada."""
     for ch in db.get_active_channels():
+        try:
+            _autopilot_remix(ch)
+        except Exception as e:
+            db.log("autopilot", f"Remix automático falló: {e}", "warn", cid=ch["id"])
         if ch.get("autonomous"):
             _autopilot_paced(ch)
             continue
