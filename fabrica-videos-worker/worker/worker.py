@@ -401,21 +401,20 @@ def process_video(v):
             if reference_url and visual_list:
                 try:
                     import screenshot
-                    shot_path = os.path.join(td, "shot_0.png")
-                    got = screenshot.capture(reference_url, shot_path,
-                                            width=w, height=h if vtype == "short" else int(w * 9 / 16))
+                    shot_path = os.path.join(td, "shot_0.jpg")
+                    got = screenshot.get_main_image(reference_url, shot_path)
                     if got:
-                        visual_list[0] = {"type": "image", "path": got, "source": "screenshot",
+                        visual_list[0] = {"type": "image", "path": got, "source": "main_image",
                                           "ref": reference_url[:120]}
                         db.update_video(vid, source_url=reference_url)
-                        db.log("visuals", f"Captura real de la fuente OK: {reference_url}",
+                        db.log("visuals", f"Imagen principal real de la fuente OK: {reference_url}",
                                vid=vid, cid=ch["id"])
                     else:
-                        db.log("visuals", f"No se pudo capturar la fuente ({reference_url}); "
+                        db.log("visuals", f"No se encontró imagen principal de la fuente ({reference_url}); "
                                           "se sigue con el resto del material normal",
                                "warn", vid, ch["id"])
                 except Exception as e:
-                    db.log("visuals", f"Captura de pantalla falló: {e}", "warn", vid, ch["id"])
+                    db.log("visuals", f"Imagen principal de la fuente falló: {e}", "warn", vid, ch["id"])
 
         n_vid = sum(1 for x in visual_list if x.get("type") == "video")
         n_img = sum(1 for x in visual_list if x.get("type") == "image")
