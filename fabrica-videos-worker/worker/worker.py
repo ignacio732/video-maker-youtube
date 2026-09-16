@@ -216,6 +216,8 @@ def process_video(v):
                             db.log("remix", f"Sin subtítulos disponibles: \"{cand.get('title') or cand['url']}\"",
                                   "warn", vid, ch["id"])
                             continue
+                        if v.get("remix_save_transcript"):
+                            db.update_video(vid, original_transcript=" ".join(s["text"] for s in segs))
                         data = llm.remix_script(ch, vtype, info["title"] if info else "",
                                                info["view_count"] if info else 0, segs)
                         reference_url = cand["url"]  # también le saca captura real al hook
