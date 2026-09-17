@@ -241,23 +241,26 @@ def choose_visual(seg, subject, outdir, idx, w, h, orientation, min_dur, used_id
     # 3) Nada relevante → tarjeta de gradiente (mejor que un clip fuera de tema)
     return {"type": "gradient"}
 
-def fetch_visuals(segments, seg_durations, subject, outdir, vtype="short", w=1080, h=1920):
+def fetch_visuals(segments, seg_durations, subject, outdir, vtype="short", w=1080, h=1920, avoid_ids=None):
     """
     Devuelve una lista de visuales (1 por segmento, alineada al orden de 'segments'),
     cada uno {type:'video'|'image'|'gradient', path?}. Dedupe global por id.
+    `avoid_ids`: ids ya usados en videos RECIENTES del mismo canal (no solo en este
+    video) — sin esto, un nicho con poco stock disponible (ej. eSIM) termina
+    repitiendo la misma foto/video de un video a otro.
     """
     orientation = "portrait" if vtype == "short" else "landscape"
-    used_ids = set()
+    used_ids = set(avoid_ids or ())
     out = []
     for i, seg in enumerate(segments):
         dur = seg_durations[i] if i < len(seg_durations) else 3.0
         out.append(choose_visual(seg, subject, outdir, i, w, h, orientation, dur, used_ids))
     return out
 
-def fill_gaps(visual_list, segments, seg_durations, subject, outdir, vtype="short", w=1080, h=1920):
+def fill_gaps(visual_list, segments, seg_durations, subject, outdir, vtype="short", w=1080, h=1920, avoid_ids=None):
     """Completa SOLO los segmentos marcados 'gradient' con stock relevante (eficiente)."""
     orientation = "portrait" if vtype == "short" else "landscape"
-    used_ids = set()
+    used_ids = set(avoid_ids or ())
     for i, vis in enumerate(visual_list):
         if vis.get("type") == "gradient":
             dur = seg_durations[i] if i < len(seg_durations) else 3.0
