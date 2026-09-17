@@ -61,6 +61,27 @@ def count_open_videos(cid, vtype=None):
     rows = _get("videos", params)
     return len(rows)
 
+def get_recent_visual_ids(cid, limit=60):
+    """IDs de stock (Pexels) usados en videos RECIENTES de este canal — para que
+    fetch_visuals/fill_gaps los evite y no repita la misma foto/video de un video
+    a otro (pasa seguido en nichos con poco stock disponible, ej. eSIM)."""
+    rows = _get("visual_history", {"channel_id": f"eq.{cid}", "select": "asset_id",
+                                   "order": "used_at.desc", "limit": str(limit)})
+    return {r["asset_id"] for r in rows}
+
+def record_visual_ids(cid, visual_list):
+    """Guarda los ids de stock de Pexels usados en este video para el dedupe entre
+    videos (ver get_recent_visual_ids). Las imágenes de IA no se guardan: su 'ref'
+    es un prompt de texto, no un id reusable."""
+    ids = {v.get("ref") for v in (visual_list or []) if v.get("ref") and v.get("source") == "pexels"}
+    if not ids:
+        return
+    rows = [{"channel_id": cid, "asset_id": str(i)} for i in ids]
+    try:
+        _post("visual_history", rows)
+    except Exception:
+        pass
+
 def get_ready_videos(cid, vtype=None, limit=1):
     params = {"channel_id": f"eq.{cid}", "status": "eq.ready",
              "select": "*", "order": "created_at.asc", "limit": str(limit)}
