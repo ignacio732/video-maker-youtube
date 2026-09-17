@@ -88,7 +88,7 @@ def _hooks_for(channel):
     return HOOKS_ES
 
 def _prompt(channel, vtype, seed_title, trends, recent_titles=None, top_performers=None,
-           visual_learning=None, research_context=None):
+           visual_learning=None, research_context=None, recent_hooks=None):
     if vtype == "short":
         target_sec = channel.get("short_target_sec")
         if target_sec:
@@ -161,6 +161,15 @@ def _prompt(channel, vtype, seed_title, trends, recent_titles=None, top_performe
         memory_block = ("\nMEMORIA DE CONTENIDO — temas YA tratados en este canal, NO elijas ninguno de "
                         "estos ni un ángulo casi idéntico (elegí un tema o ángulo distinto dentro del "
                         f"nicho):\n{lst}\n")
+    hooks_block = ""
+    if recent_hooks:
+        lst = "\n".join(f'- "{h}"' for h in recent_hooks[:12])
+        hooks_block = (
+            "\nHOOKS YA USADOS hace poco en este canal — NO repitas ninguna de estas frases ni su "
+            "estructura exacta (ej. si ya usaste \"Todo lo que sabés de X es mentira\", NO uses esa "
+            "misma plantilla otra vez, elegí una de las 8 plantillas que sea distinta a las de abajo):"
+            f"\n{lst}\n"
+        )
     learn_block = ""
     if top_performers:
         lines = []
@@ -196,7 +205,7 @@ Formato del video: {vtype} — duración objetivo {dur}.
 IDENTIDAD DEL CANAL (mantené COHERENCIA con todos sus videos): mismo tono y estilo de voz
 en cada video; el CTA final invita a seguir el canal "{channel['name']}" para más de
 {channel['niche']} y encadena con el gancho (loop). {brand_line}
-{country_line}{seed}{research_block}{trend_block}{memory_block}{learn_block}{visual_learn_block}
+{country_line}{seed}{research_block}{trend_block}{memory_block}{hooks_block}{learn_block}{visual_learn_block}
 Plantillas de gancho probadas (elegí/adaptá la mejor): {_hooks_for(channel)}
 
 Reglas de retención: gancho en los primeros 2 segundos; abrí un open loop y pagalo al final;
@@ -465,11 +474,12 @@ Keywords SIEMPRE en inglés, concretas y filmables (nada abstracto)."""
     return data
 
 def generate(channel, vtype="short", seed_title=None, trends=None, recent_titles=None,
-            top_performers=None, visual_learning=None, research_context=None):
+            top_performers=None, visual_learning=None, research_context=None, recent_hooks=None):
     """Devuelve dict con title, hook, description, tags, hashtags, thumbnail_text, format, segments."""
     messages = [{"role": "system", "content": SYSTEM},
                 {"role": "user", "content": _prompt(channel, vtype, seed_title, trends, recent_titles,
-                                                    top_performers, visual_learning, research_context)}]
+                                                    top_performers, visual_learning, research_context,
+                                                    recent_hooks)}]
     raw = _gemini(messages) if PROVIDER == "gemini" else _groq(messages)
     data = _extract_json(raw)
     data.setdefault("tags", [])
