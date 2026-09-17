@@ -239,10 +239,12 @@ def process_video(v):
             if data is None:
                 # Fallback: generación normal, usando el título original como semilla si lo tenemos.
                 recent_titles = db.get_recent_titles(ch["id"], 40)
+                recent_hooks = db.get_recent_hooks(ch["id"], 12)
                 top_performers = db.get_top_performers(ch["id"], 3)
                 visual_learning = db.get_visual_learnings(ch["id"])
                 data = llm.generate(ch, vtype, seed_title=v.get("title"), recent_titles=recent_titles,
-                                    top_performers=top_performers, visual_learning=visual_learning)
+                                    top_performers=top_performers, visual_learning=visual_learning,
+                                    recent_hooks=recent_hooks)
         else:
             trend_topics = None
             reference_url = None
@@ -270,6 +272,7 @@ def process_video(v):
                     db.log("trends", f"sin tendencias: {e}", "warn", vid, ch["id"])
             data = None
             recent_titles = db.get_recent_titles(ch["id"], 40)
+            recent_hooks = db.get_recent_hooks(ch["id"], 12)
             top_performers = db.get_top_performers(ch["id"], 3)
             visual_learning = db.get_visual_learnings(ch["id"])
             if v.get("seed_trend_id"):
@@ -288,7 +291,8 @@ def process_video(v):
             try:
                 data = llm.generate(ch, vtype, seed_title=v.get("title"), trends=trend_topics,
                                     recent_titles=recent_titles, top_performers=top_performers,
-                                    visual_learning=visual_learning, research_context=research_context)
+                                    visual_learning=visual_learning, research_context=research_context,
+                                    recent_hooks=recent_hooks)
             except Exception as e:
                 if trend_topics:
                     # Si falló con tendencias (ej. una tendencia sensible que el LLM rechaza,
@@ -298,7 +302,8 @@ def process_video(v):
                            "warn", vid, ch["id"])
                     data = llm.generate(ch, vtype, seed_title=v.get("title"), trends=None,
                                         recent_titles=recent_titles, top_performers=top_performers,
-                                        visual_learning=visual_learning, research_context=research_context)
+                                        visual_learning=visual_learning, research_context=research_context,
+                                        recent_hooks=recent_hooks)
                 else:
                     raise
         db.add_script(vid, data["full_text"], data["segments"])
