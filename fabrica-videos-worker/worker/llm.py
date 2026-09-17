@@ -125,13 +125,16 @@ def _prompt(channel, vtype, seed_title, trends, recent_titles=None, top_performe
             "inventados. Podés simplificar y elegir qué contar, pero no contradecir lo que dice el "
             f"extracto:\n---\n{research_context}\n---\n"
         )
-    elif seed_title:
-        # Se pidió un tema puntual pero no se pudo bajar el artículo real (paywall, etc.):
-        # avisarle al modelo para que sea conservador y no invente cifras específicas.
+    elif seed_title or trends:
+        # Se pidió un tema puntual o hay tendencias de titular, pero no se pudo bajar
+        # el artículo real (paywall, etc.) — avisarle al modelo para que sea
+        # conservador y no invente cifras específicas (cotizaciones, porcentajes,
+        # citas) que no están respaldadas por nada.
         research_block = (
-            "\nOJO: no se pudo acceder al artículo original de este tema puntual — no inventes "
-            "cifras, citas ni datos específicos que no puedas sostener; mantené el guion en "
-            "afirmaciones generales y verificables sobre el tema.\n"
+            "\nOJO: no se pudo bajar el artículo original de este tema — no inventes cotizaciones, "
+            "porcentajes, montos, citas ni ningún dato numérico específico que no puedas sostener. "
+            "Si el tema pide un número concreto que no tenés confirmado, hablá en términos generales "
+            "('subió', 'se mantuvo estable') en vez de poner un valor que podrías estar inventando.\n"
         )
     trend_block = ""
     if trends:
