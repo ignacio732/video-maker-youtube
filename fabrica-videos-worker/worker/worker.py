@@ -246,6 +246,7 @@ def process_video(v):
         else:
             trend_topics = None
             reference_url = None
+            research_context = None
             if not v.get("title"):
                 try:
                     found = trends.for_channel(ch, 8)
@@ -254,18 +255,23 @@ def process_video(v):
                         db.add_trend(ch["id"], t["topic"], t["source"], t.get("category"), t.get("url"))
                     cats = ", ".join(sorted(set(t.get("category") or "" for t in found[:5])))
                     db.log("trends", f"{len(trend_topics)} tendencias ({cats})", vid=vid, cid=ch["id"])
-                    # Canal de sitios de referencia (noticias reales): guardamos la URL de la
-                    # nota más relevante para, más abajo, sacarle una captura real de pantalla
-                    # y mezclarla con el resto del material del video (autenticidad).
+                    # Canal de sitios de referencia (noticias reales): investigar de
+                    # verdad la nota (bajar el artículo real), no solo narrar el titular
+                    # a ciegas — sin esto la IA termina inventando cifras (cotización,
+                    # porcentajes) que no están en ningún lado.
                     if ch.get("reference_sites") and found and found[0].get("url"):
                         reference_url = found[0]["url"]
+                        research_context = trends.fetch_article_text(reference_url)
+                        db.log("trends",
+                               "Investigación real del artículo OK" if research_context
+                               else "No se pudo leer el artículo original; se sigue solo con el titular",
+                               "info" if research_context else "warn", vid, ch["id"])
                 except Exception as e:
                     db.log("trends", f"sin tendencias: {e}", "warn", vid, ch["id"])
             data = None
             recent_titles = db.get_recent_titles(ch["id"], 40)
             top_performers = db.get_top_performers(ch["id"], 3)
             visual_learning = db.get_visual_learnings(ch["id"])
-            research_context = None
             if v.get("seed_trend_id"):
                 # Video pedido desde una tendencia puntual (dashboard → "🎬 Generar"):
                 # investigar de verdad la noticia (bajar el artículo real), no solo
