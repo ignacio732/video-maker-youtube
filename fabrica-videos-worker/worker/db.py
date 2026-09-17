@@ -69,6 +69,15 @@ def get_recent_visual_ids(cid, limit=60):
                                    "order": "used_at.desc", "limit": str(limit)})
     return {r["asset_id"] for r in rows}
 
+def get_recent_source_urls(cid, limit=100):
+    """URLs de artículos/notas ya usadas como fuente en videos recientes de este
+    canal — para que la generación automática no vuelva a elegir el MISMO titular
+    del feed una y otra vez (pasó de verdad: un solo titular de genbeta generó 8
+    videos casi idénticos porque nada chequeaba si esa URL ya se había usado)."""
+    rows = _get("videos", {"channel_id": f"eq.{cid}", "source_url": "not.is.null",
+                           "select": "source_url", "order": "created_at.desc", "limit": str(limit)})
+    return {r["source_url"] for r in rows if r.get("source_url")}
+
 def record_visual_ids(cid, visual_list):
     """Guarda los ids de stock de Pexels usados en este video para el dedupe entre
     videos (ver get_recent_visual_ids). Las imágenes de IA no se guardan: su 'ref'
