@@ -357,10 +357,14 @@ def process_video(v):
 
         visual_list = []
         if not imgs:
+            # ids de stock usados en videos recientes de este canal, para no repetir
+            # la misma foto/video entre un video y otro (nichos con poco stock, ej. eSIM).
+            avoid_ids = db.get_recent_visual_ids(ch["id"])
             # 1) Stock relevante (salvo modo IA puro)
             if mode in ("stock", "hybrid"):
                 try:
-                    visual_list = visuals.fetch_visuals(segs, seg_durations, subject, td, vtype, w, h)
+                    visual_list = visuals.fetch_visuals(segs, seg_durations, subject, td, vtype, w, h,
+                                                        avoid_ids=avoid_ids)
                 except Exception as e:
                     db.log("visuals", f"stock falló: {e}", "warn", vid, ch["id"])
             if not visual_list:
@@ -396,9 +400,12 @@ def process_video(v):
             if mode == "ai" and ai_style in ("realista", "documental") \
                and any(x.get("type") == "gradient" for x in visual_list):
                 try:
-                    visuals.fill_gaps(visual_list, segs, seg_durations, subject, td, vtype, w, h)
+                    visuals.fill_gaps(visual_list, segs, seg_durations, subject, td, vtype, w, h,
+                                      avoid_ids=avoid_ids)
                 except Exception as e:
                     db.log("visuals", f"stock de respaldo falló: {e}", "warn", vid, ch["id"])
+
+            db.record_visual_ids(ch["id"], visual_list)
 
             # 3) Captura real de la fuente (autenticidad): si el video sale de una
             # noticia puntual (reference_sites o tendencia elegida a mano), sacamos
