@@ -106,6 +106,14 @@ def get_recent_titles(cid, limit=40):
                            "order": "created_at.desc", "limit": str(limit)})
     return [r["title"] for r in rows if r.get("title")]
 
+def get_recent_hooks(cid, limit=12):
+    """Los últimos hooks (ganchos de apertura) usados en el canal, para que el LLM
+    no repita siempre la misma plantilla (ej. 'Todo lo que sabés de X es mentira'
+    salía en más de un tercio de los videos antes de este chequeo)."""
+    rows = _get("ideas", {"channel_id": f"eq.{cid}", "hook": "not.is.null",
+                          "select": "hook", "order": "created_at.desc", "limit": str(limit)})
+    return [r["hook"] for r in rows if r.get("hook")]
+
 def get_top_performers(cid, limit=3, min_views=1):
     """Los videos con mejor desempeño del canal hasta ahora (por vistas más recientes
     registradas en video_metrics), para que el próximo guion aprenda del formato/ángulo
