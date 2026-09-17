@@ -252,6 +252,17 @@ def process_video(v):
             if not v.get("title"):
                 try:
                     found = trends.for_channel(ch, 8)
+                    # No volver a ofrecer un titular cuya URL ya se usó como fuente de un
+                    # video reciente — sin esto, si el feed tarda en renovarse, la IA puede
+                    # terminar eligiendo el mismo titular varias corridas seguidas (pasó de
+                    # verdad: 8 videos casi idénticos sobre la misma nota de Meta/energía).
+                    if ch.get("reference_sites"):
+                        used_urls = db.get_recent_source_urls(ch["id"])
+                        fresh = [t for t in found if not t.get("url") or t["url"] not in used_urls]
+                        if len(fresh) < len(found):
+                            db.log("trends", f"{len(found) - len(fresh)} titular(es) ya usado(s) descartado(s)",
+                                  vid=vid, cid=ch["id"])
+                        found = fresh
                     trend_topics = [t["topic"] for t in found]
                     for t in found[:5]:
                         db.add_trend(ch["id"], t["topic"], t["source"], t.get("category"), t.get("url"))
