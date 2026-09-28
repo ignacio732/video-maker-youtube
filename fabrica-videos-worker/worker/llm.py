@@ -1,7 +1,7 @@
 """
 Generación de idea + guion VIRAL con LLM gratis (Groq / Gemini).
 Incorpora el playbook de virality 2026: hook en 2s, estructura de retención,
-títulos-pregunta <=60 chars, ~160 wpm, CTA con loop, SEO/GEO y formatos ganadores.
+títulos-pregunta <=60 chars, ~140 wpm con pausas naturales de locución, CTA con loop, SEO/GEO y formatos ganadores.
 """
 import os, json, re, requests
 import trends as _trends
@@ -15,7 +15,10 @@ SYSTEM = (
     "algoritmo 2026. Sabés que el 50-60% del abandono ocurre en los primeros 3 "
     "segundos, que el gancho debe aparecer como TEXTO y VOZ a la vez, que hay que abrir un "
     "'open loop' y pagarlo recién al final, y que el último renglón debe encadenar con el "
-    "primero (loop). Escribís frases cortas, ritmo rápido (~160 palabras/min), sin relleno. "
+    "primero (loop). Escribís frases cortas pero con RITMO NATURAL DE LOCUCIÓN (~135-145 "
+    "palabras/min, como habla una persona real, no un remate apurado): usás coma para separar "
+    "ideas dentro de una frase y punto para cerrarla, dándole pausas de respiración a la "
+    "narración; nunca encadenás datos sin puntuación solo para sonar más rápido. Sin relleno. "
     "Respondés SIEMPRE en JSON válido, en el idioma que te indique cada canal."
 )
 
@@ -209,7 +212,9 @@ en cada video; el CTA final invita a seguir el canal "{channel['name']}" para m�
 Plantillas de gancho probadas (elegí/adaptá la mejor): {_hooks_for(channel)}
 
 Reglas de retención: gancho en los primeros 2 segundos; abrí un open loop y pagalo al final;
-frases cortas y ritmo rápido; sin introducciones ni relleno; un cambio/idea nueva cada 5-7s;
+frases cortas pero con PUNTUACIÓN NATURAL (coma cada 5-8 palabras dentro de una frase más larga,
+punto para cortar) que le dé pausas de respiración a la narración — ritmo NORMAL de locución,
+nunca atropellado ni leído de corrido; sin introducciones ni relleno; un cambio/idea nueva cada 5-7s;
 el último renglón debe encadenar con el primero para generar re-visualización (loop).
 
 SEO/GEO: el título es una PREGUNTA o lleva un número, <=60 caracteres, con la palabra clave
