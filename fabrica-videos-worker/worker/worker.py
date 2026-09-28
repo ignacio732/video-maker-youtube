@@ -503,6 +503,40 @@ def process_video(v):
         db.log("render", f"Render OK {size:.1f}MB", vid=vid, cid=ch["id"])
         db.update_video(vid, duration_seconds=round(dur, 1))
 
+        # 5b) AVATAR UGC (opcional): si el canal tiene el modo avatar activado, rota
+        # un clip YA generado del pool (ver avatar.py + db.avatar_clips) y lo pega
+        # adelante (y atrás, en modo intro_outro) del video recién armado. Nunca
+        # bloquea el video: si el pool está vacío (o falla), sale igual sin avatar.
+        if ch.get("avatar_enabled") and ch.get("avatar_character_id") and vtype == "short":
+            try:
+                mode = (ch.get("avatar_mode") or "intro").lower()
+                intro = db.get_ready_avatar_clip(ch["id"], "intro") if mode in \
+                    ("intro", "intro_outro", "cutaways") else None
+                outro = db.get_ready_avatar_clip(ch["id"], "outro") if mode == "intro_outro" else None
+                if intro:
+                    intro_path = _download(intro["clip_url"], os.path.join(td, "avatar_intro.mp4"))
+                    outro_path = _download(outro["clip_url"], os.path.join(td, "avatar_outro.mp4")) \
+                        if outro else None
+                    merged = os.path.join(td, "final_with_avatar.mp4")
+                    render.prepend_avatar_clip(intro_path, out, merged, w=w, h=h, outro_path=outro_path)
+                    out = merged
+                    clip_urls = [intro["clip_url"]] + ([outro["clip_url"]] if outro else [])
+                    db.update_video(vid, avatar_hook_pattern=intro.get("hook_pattern"),
+                                    avatar_clip_urls=clip_urls)
+                    db.update_channel(ch["id"], avatar_last_hook_pattern=intro.get("hook_pattern"),
+                                      avatar_last_wardrobe=intro.get("wardrobe"))
+                    db.mark_avatar_clip_used(intro["id"], intro.get("times_used"))
+                    if outro:
+                        db.mark_avatar_clip_used(outro["id"], outro.get("times_used"))
+                    db.log("avatar", f"Avatar agregado ({mode}) — hook '{intro.get('hook_pattern')}', "
+                                     f"vestuario '{intro.get('wardrobe')}'"
+                                     + (f" + cierre" if outro else ""), vid=vid, cid=ch["id"])
+                else:
+                    db.log("avatar", "Canal con avatar activado pero sin clips listos en el pool "
+                                     "(avatar_clips) — este video sale sin avatar", "warn", vid, ch["id"])
+            except Exception as e:
+                db.log("avatar", f"No se pudo agregar el clip de avatar: {e}", "warn", vid, ch["id"])
+
         # Comprimir si supera el límite de Storage (50MB) y subir a Supabase
         if os.path.getsize(out) > 45 * 1024 * 1024:
             comp = os.path.join(td, "final_c.mp4")
