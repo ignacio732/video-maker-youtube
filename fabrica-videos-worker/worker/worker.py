@@ -504,38 +504,63 @@ def process_video(v):
         db.update_video(vid, duration_seconds=round(dur, 1))
 
         # 5b) AVATAR UGC (opcional): si el canal tiene el modo avatar activado, rota
-        # un clip YA generado del pool (ver avatar.py + db.avatar_clips) y lo pega
-        # adelante (y atrás, en modo intro_outro) del video recién armado. Nunca
-        # bloquea el video: si el pool está vacío (o falla), sale igual sin avatar.
+        # clip(s) YA generados del pool (ver avatar.py + db.avatar_clips) y los pega
+        # en el video recién armado — adelante/atrás (intro, intro_outro) o
+        # intercalados a mitad de video (cutaways). Nunca bloquea el video: si el
+        # pool está vacío (o falla), sale igual sin avatar. 'full' no pasa por acá
+        # (se genera aparte, manual, no usa pool).
         if ch.get("avatar_enabled") and ch.get("avatar_character_id") and vtype == "short":
-            try:
-                mode = (ch.get("avatar_mode") or "intro").lower()
-                intro = db.get_ready_avatar_clip(ch["id"], "intro") if mode in \
-                    ("intro", "intro_outro", "cutaways") else None
-                outro = db.get_ready_avatar_clip(ch["id"], "outro") if mode == "intro_outro" else None
-                if intro:
-                    intro_path = _download(intro["clip_url"], os.path.join(td, "avatar_intro.mp4"))
-                    outro_path = _download(outro["clip_url"], os.path.join(td, "avatar_outro.mp4")) \
-                        if outro else None
-                    merged = os.path.join(td, "final_with_avatar.mp4")
-                    render.prepend_avatar_clip(intro_path, out, merged, w=w, h=h, outro_path=outro_path)
-                    out = merged
-                    clip_urls = [intro["clip_url"]] + ([outro["clip_url"]] if outro else [])
-                    db.update_video(vid, avatar_hook_pattern=intro.get("hook_pattern"),
-                                    avatar_clip_urls=clip_urls)
-                    db.update_channel(ch["id"], avatar_last_hook_pattern=intro.get("hook_pattern"),
-                                      avatar_last_wardrobe=intro.get("wardrobe"))
-                    db.mark_avatar_clip_used(intro["id"], intro.get("times_used"))
-                    if outro:
-                        db.mark_avatar_clip_used(outro["id"], outro.get("times_used"))
-                    db.log("avatar", f"Avatar agregado ({mode}) — hook '{intro.get('hook_pattern')}', "
-                                     f"vestuario '{intro.get('wardrobe')}'"
-                                     + (f" + cierre" if outro else ""), vid=vid, cid=ch["id"])
-                else:
-                    db.log("avatar", "Canal con avatar activado pero sin clips listos en el pool "
-                                     "(avatar_clips) — este video sale sin avatar", "warn", vid, ch["id"])
-            except Exception as e:
-                db.log("avatar", f"No se pudo agregar el clip de avatar: {e}", "warn", vid, ch["id"])
+            mode = (ch.get("avatar_mode") or "intro").lower()
+            if mode in ("intro", "intro_outro"):
+                try:
+                    intro = db.get_ready_avatar_clip(ch["id"], "intro")
+                    outro = db.get_ready_avatar_clip(ch["id"], "outro") if mode == "intro_outro" else None
+                    if intro:
+                        intro_path = _download(intro["clip_url"], os.path.join(td, "avatar_intro.mp4"))
+                        outro_path = _download(outro["clip_url"], os.path.join(td, "avatar_outro.mp4")) \
+                            if outro else None
+                        merged = os.path.join(td, "final_with_avatar.mp4")
+                        render.prepend_avatar_clip(intro_path, out, merged, w=w, h=h, outro_path=outro_path)
+                        out = merged
+                        clip_urls = [intro["clip_url"]] + ([outro["clip_url"]] if outro else [])
+                        db.update_video(vid, avatar_hook_pattern=intro.get("hook_pattern"),
+                                        avatar_clip_urls=clip_urls)
+                        db.update_channel(ch["id"], avatar_last_hook_pattern=intro.get("hook_pattern"),
+                                          avatar_last_wardrobe=intro.get("wardrobe"))
+                        db.mark_avatar_clip_used(intro["id"], intro.get("times_used"))
+                        if outro:
+                            db.mark_avatar_clip_used(outro["id"], outro.get("times_used"))
+                        db.log("avatar", f"Avatar agregado ({mode}) — hook '{intro.get('hook_pattern')}', "
+                                         f"vestuario '{intro.get('wardrobe')}'"
+                                         + (" + cierre" if outro else ""), vid=vid, cid=ch["id"])
+                    else:
+                        db.log("avatar", "Canal con avatar activado pero sin clips listos en el pool "
+                                         "(avatar_clips) — este video sale sin avatar", "warn", vid, ch["id"])
+                except Exception as e:
+                    db.log("avatar", f"No se pudo agregar el clip de avatar: {e}", "warn", vid, ch["id"])
+            elif mode == "cutaways":
+                try:
+                    cutaways = db.get_ready_avatar_clips(ch["id"], "cutaway", count=2)
+                    if cutaways:
+                        paths = [_download(cw["clip_url"], os.path.join(td, f"cutaway_{i}.mp4"))
+                                for i, cw in enumerate(cutaways)]
+                        merged = os.path.join(td, "final_with_avatar.mp4")
+                        render.insert_cutaway_clips(out, paths, merged, td, w=w, h=h)
+                        out = merged
+                        db.update_video(vid, avatar_hook_pattern=cutaways[0].get("hook_pattern"),
+                                        avatar_clip_urls=[cw["clip_url"] for cw in cutaways])
+                        db.update_channel(ch["id"], avatar_last_hook_pattern=cutaways[-1].get("hook_pattern"),
+                                          avatar_last_wardrobe=cutaways[-1].get("wardrobe"))
+                        for cw in cutaways:
+                            db.mark_avatar_clip_used(cw["id"], cw.get("times_used"))
+                        patterns = ", ".join(cw.get("hook_pattern") or "?" for cw in cutaways)
+                        db.log("avatar", f"{len(cutaways)} cutaway(s) intercalados: {patterns}",
+                              vid=vid, cid=ch["id"])
+                    else:
+                        db.log("avatar", "Canal en modo cutaways pero sin clips 'cutaway' en el pool "
+                                         "— este video sale sin avatar", "warn", vid, ch["id"])
+                except Exception as e:
+                    db.log("avatar", f"No se pudieron intercalar los cutaways: {e}", "warn", vid, ch["id"])
 
         # Comprimir si supera el límite de Storage (50MB) y subir a Supabase
         if os.path.getsize(out) > 45 * 1024 * 1024:
