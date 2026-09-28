@@ -24,9 +24,14 @@ def _split_sentence(sent, start, dur):
         t += d
     return out
 
-async def _synth(text, voice, out_mp3):
+TTS_RATE = os.environ.get("TTS_RATE", "-10%")  # ritmo de locución: el default de la voz
+                                                # (+0%) se sentía apurado/sin pausas; -10% baja
+                                                # a un ritmo de lectura normal, no solo confiamos
+                                                # en la puntuación del guion.
+
+async def _synth(text, voice, out_mp3, rate=None):
     words, sentences = [], []
-    comm = edge_tts.Communicate(text, voice, proxy=PROXY)
+    comm = edge_tts.Communicate(text, voice, rate=(rate or TTS_RATE), proxy=PROXY)
     with open(out_mp3, "wb") as f:
         async for ch in comm.stream():
             t = ch.get("type")
@@ -47,9 +52,10 @@ async def _synth(text, voice, out_mp3):
         words.extend(_split_sentence(s["text"], s["start"], s["dur"]))
     return words
 
-def synth_voice(text, voice, out_mp3):
-    """Genera mp3 y devuelve lista de palabras con start/end en segundos."""
-    return asyncio.run(_synth(text, voice, out_mp3))
+def synth_voice(text, voice, out_mp3, rate=None):
+    """Genera mp3 y devuelve lista de palabras con start/end en segundos.
+    rate: '+0%' = velocidad nativa de la voz; default TTS_RATE (-10%) si no se pasa nada."""
+    return asyncio.run(_synth(text, voice, out_mp3, rate=rate))
 
 # ------------------------------------------------------------------- SUBTÍTULOS
 def _group_words(words, max_chars=16):
