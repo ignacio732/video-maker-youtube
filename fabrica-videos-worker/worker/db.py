@@ -403,7 +403,8 @@ def channels_needing_avatar_clips(min_pool=6):
         mode = (ch.get("avatar_mode") or "intro").lower()
         if mode == "full":
             continue
-        modes = ["intro", "outro"] if mode == "intro_outro" else [mode]
+        modes = ["intro", "outro"] if mode == "intro_outro" else \
+                ["cutaway"] if mode == "cutaways" else [mode]
         needs = {m: count_avatar_clips(ch["id"], m) for m in modes}
         if any(n < min_pool for n in needs.values()):
             out.append({**ch, "_avatar_pool_needs": needs})
@@ -430,6 +431,39 @@ def get_ready_avatar_clip(cid, mode="intro"):
     least_used = [r for r in pool if (r.get("times_used") or 0) == min_used]
     import random
     return random.choice(least_used)
+
+def get_ready_avatar_clips(cid, mode="cutaway", count=2):
+    """Como get_ready_avatar_clip pero devuelve varios SIN repetirse entre sí
+    (para cutaways: un mismo video puede llevar 2+ clips intercalados, y no
+    tendría sentido que sean el mismo). Prioriza los menos usados y evita el
+    último hook/vestuario usado por el canal igual que la versión singular;
+    si no alcanza la diversidad ideal, completa con lo que quede del pool sin
+    repetir el mismo clip. [] si el pool está vacío para ese canal/modo."""
+    ch = get_channel(cid) or {}
+    rows = _get("avatar_clips", {"channel_id": f"eq.{cid}", "mode": f"eq.{mode}",
+                                 "select": "*", "order": "times_used.asc", "limit": "30"})
+    if not rows:
+        return []
+    last_hook = ch.get("avatar_last_hook_pattern")
+    last_wardrobe = ch.get("avatar_last_wardrobe")
+    pool = [r for r in rows if r.get("hook_pattern") != last_hook and r.get("wardrobe") != last_wardrobe] or rows
+    pool.sort(key=lambda r: r.get("times_used") or 0)
+    import random
+    chosen, used_ids, used_hooks = [], set(), set()
+    for r in pool:
+        if len(chosen) >= count:
+            break
+        if r["id"] in used_ids or r.get("hook_pattern") in used_hooks:
+            continue
+        chosen.append(r); used_ids.add(r["id"]); used_hooks.add(r.get("hook_pattern"))
+    if len(chosen) < count:  # no alcanzó la diversidad ideal: completar sin repetir id
+        for r in pool:
+            if len(chosen) >= count:
+                break
+            if r["id"] not in used_ids:
+                chosen.append(r); used_ids.add(r["id"])
+    random.shuffle(chosen)
+    return chosen
 
 def mark_avatar_clip_used(clip_id, times_used=0):
     from datetime import datetime, timezone
