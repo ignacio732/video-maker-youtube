@@ -183,6 +183,54 @@ OUTRO = {
     },
 }
 
+# ---- Cutaways — beats CORTOS para intercalar A MITAD del video (no abren ni
+# cierran: son una intervención breve del avatar entre dos frases de la
+# narración, sin sacar nada de lo narrado — el video queda un poco más largo).
+# Energía de "aparte" en una conversación, nunca de apertura/cierre.
+CUTAWAYS = {
+    "enfasis": {
+        "label": "Énfasis rápido",
+        "staging": "A brief, natural aside — quick emphatic point toward the lens or a short "
+                  "decisive nod, mid-conversation energy (not an opener), then a small glance "
+                  "away as if returning to a train of thought.",
+        "lines": {
+            "es": ["Anotá esto.", "Esto es lo importante.", "Prestá atención acá."],
+            "en": ["Write this down.", "This is the important part.", "Pay attention here."],
+            "pt": ["Anota isso.", "Essa é a parte importante.", "Presta atenção aqui."],
+        },
+    },
+    "aclaracion": {
+        "label": "Aclaración",
+        "staging": "A small correcting beat — slight head tilt or shake, brief 'let me clarify' "
+                  "energy, like interjecting mid-thought to sharpen a point, not to open or close.",
+        "lines": {
+            "es": ["Ojo, no es tan simple.", "Aclaro esto antes de seguir.", "Pará, no es lo que pensás."],
+            "en": ["Careful, it's not that simple.", "Let me clarify before moving on.", "Wait, it's not what you think."],
+            "pt": ["Cuidado, não é tão simples assim.", "Deixa eu esclarecer isso.", "Pera, não é o que você pensa."],
+        },
+    },
+    "complicidad": {
+        "label": "Complicidad",
+        "staging": "A knowing half-smile and a brief direct glance to the lens, like sharing an "
+                  "aside with someone who already gets it — casual, mid-conversation, not a hook.",
+        "lines": {
+            "es": ["Vos ya lo viviste, ¿no?", "Sabés bien de qué hablo.", "A vos te pasó también, seguro."],
+            "en": ["You've been there, right?", "You know exactly what I mean.", "This has happened to you too, I bet."],
+            "pt": ["Você já passou por isso, né?", "Você sabe bem do que eu falo.", "Isso já aconteceu com você também, aposto."],
+        },
+    },
+    "pausa_shock": {
+        "label": "Pausa shock",
+        "staging": "A brief understated pause — raised eyebrows, a short breath, quiet emphasis "
+                  "rather than a big reaction — like letting something serious sink in for a beat.",
+        "lines": {
+            "es": ["Posta.", "En serio.", "Como lo escuchás."],
+            "en": ["Seriously.", "I mean it.", "No exaggeration."],
+            "pt": ["De verdade.", "Falo sério.", "Sem exagero."],
+        },
+    },
+}
+
 # ---- Arquetipos de voz/energía ----
 VOICE_ARCHETYPES = {
     "natural": "Natural, conversational, unscripted delivery — like talking to a friend, varied "
@@ -285,6 +333,14 @@ def pick_hook_pattern(channel):
     candidates = [k for k in HOOK_PATTERNS if k != last]
     return random.choice(candidates or list(HOOK_PATTERNS.keys()))
 
+def pick_cutaway_beat(channel):
+    """Rota entre los 4 tipos de cutaway evitando repetir el último patrón usado
+    por el canal (comparte la misma memoria que los hooks — el objetivo es
+    variedad general, no una cola separada por tipo de clip)."""
+    last = channel.get("avatar_last_hook_pattern")
+    candidates = [k for k in CUTAWAYS if k != last]
+    return random.choice(candidates or list(CUTAWAYS.keys()))
+
 def build_avatar_clip_spec(channel, mode="intro", hook_pattern_key=None,
                            wardrobe_key=None, voice_archetype=None):
     """Arma la especificación completa de un clip de avatar para este canal:
@@ -297,6 +353,9 @@ def build_avatar_clip_spec(channel, mode="intro", hook_pattern_key=None,
     lang = _lang_key(channel)
     if mode == "outro":
         hp_key, hp = "cierre", OUTRO
+    elif mode == "cutaway":
+        hp_key = hook_pattern_key or pick_cutaway_beat(channel)
+        hp = CUTAWAYS[hp_key]
     else:
         hp_key = hook_pattern_key or pick_hook_pattern(channel)
         hp = HOOK_PATTERNS[hp_key]
