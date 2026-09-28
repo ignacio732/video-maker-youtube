@@ -417,6 +417,34 @@ def compose_timeline(visuals, durations, audio_mp3, ass_path, out_mp4,
         _run(cmd)
     return out_mp4
 
+def prepend_avatar_clip(avatar_path, body_path, out_mp4, w=1080, h=1920, outro_path=None):
+    """
+    Pega un clip de avatar (con su PROPIO audio nativo, con lipsync — a
+    diferencia de los visuales de stock, que van mudos bajo la voz en off) delante
+    del video ya armado por compose_timeline/compose_from_images (narración +
+    visuales), y opcionalmente un clip de cierre (outro) al final.
+    Reencodea las tres piezas a la misma resolución/fps/sample-rate — los clips
+    de Higgsfield no vienen necesariamente en el mismo formato que el render de
+    ffmpeg, así que un concat "crudo" (sin reencodear) podría fallar o desincronizar.
+    """
+    parts = [p for p in (avatar_path, body_path, outro_path) if p]
+    inputs, filters = [], []
+    for i, p in enumerate(parts):
+        inputs += ["-i", p]
+        filters.append(
+            f"[{i}:v]scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h},"
+            f"fps=30,setsar=1,setpts=PTS-STARTPTS[v{i}]")
+        filters.append(f"[{i}:a]aresample=44100,asetpts=PTS-STARTPTS[a{i}]")
+    n = len(parts)
+    concat_in = "".join(f"[v{i}][a{i}]" for i in range(n))
+    fc = ";".join(filters) + f";{concat_in}concat=n={n}:v=1:a=1[vout][aout]"
+    cmd = ["ffmpeg", "-y"] + inputs + ["-filter_complex", fc,
+           "-map", "[vout]", "-map", "[aout]",
+           "-c:v", "libx264", "-preset", "medium", "-crf", "23",
+           "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k", "-r", "30", out_mp4]
+    _run(cmd)
+    return out_mp4
+
 def compose_from_images(images, audio_mp3, ass_path, out_mp4, w=1080, h=1920, music=None):
     """Render con IMÁGENES propias del usuario: Ken Burns (zoom/paneo) secuenciado + voz + subs."""
     dur = audio_duration(audio_mp3) + 0.4
