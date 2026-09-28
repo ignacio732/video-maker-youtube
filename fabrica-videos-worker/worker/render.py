@@ -417,17 +417,13 @@ def compose_timeline(visuals, durations, audio_mp3, ass_path, out_mp4,
         _run(cmd)
     return out_mp4
 
-def prepend_avatar_clip(avatar_path, body_path, out_mp4, w=1080, h=1920, outro_path=None):
-    """
-    Pega un clip de avatar (con su PROPIO audio nativo, con lipsync — a
-    diferencia de los visuales de stock, que van mudos bajo la voz en off) delante
-    del video ya armado por compose_timeline/compose_from_images (narración +
-    visuales), y opcionalmente un clip de cierre (outro) al final.
-    Reencodea las tres piezas a la misma resolución/fps/sample-rate — los clips
-    de Higgsfield no vienen necesariamente en el mismo formato que el render de
-    ffmpeg, así que un concat "crudo" (sin reencodear) podría fallar o desincronizar.
-    """
-    parts = [p for p in (avatar_path, body_path, outro_path) if p]
+def concat_parts(parts, out_mp4, w=1080, h=1920):
+    """Concatena una lista arbitraria de videos, CADA UNO CON SU PROPIO AUDIO
+    (a diferencia de los visuales de stock, que van mudos bajo la voz en off,
+    estas piezas ya traen su audio real — narración o avatar con lipsync).
+    Reencodea todas a la misma resolución/fps/sample-rate: las piezas pueden venir
+    de fuentes distintas (Higgsfield, cortes del propio render) y un concat
+    "crudo" sin reencodear podría fallar o desincronizar."""
     inputs, filters = [], []
     for i, p in enumerate(parts):
         inputs += ["-i", p]
@@ -444,6 +440,54 @@ def prepend_avatar_clip(avatar_path, body_path, out_mp4, w=1080, h=1920, outro_p
            "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k", "-r", "30", out_mp4]
     _run(cmd)
     return out_mp4
+
+def prepend_avatar_clip(avatar_path, body_path, out_mp4, w=1080, h=1920, outro_path=None):
+    """Pega un clip de avatar (con su propio audio, con lipsync) delante del
+    video ya armado (narración + visuales), y opcionalmente un clip de cierre
+    (outro) al final. Ver concat_parts."""
+    parts = [p for p in (avatar_path, body_path, outro_path) if p]
+    return concat_parts(parts, out_mp4, w=w, h=h)
+
+def split_video(in_mp4, cut_times, td):
+    """Corta in_mp4 en len(cut_times)+1 pedazos, en los segundos dados (ascendentes).
+    Reencodea cada pedazo — cortar con -c copy en un punto que no sea keyframe
+    puede dejar el arranque del pedazo congelado, y acá los puntos de corte son
+    arbitrarios (elegidos por duración, no por keyframe)."""
+    total = audio_duration(in_mp4)
+    bounds = [0.0] + sorted(t for t in cut_times if 0 < t < total) + [total]
+    pieces = []
+    for i in range(len(bounds) - 1):
+        start, end = bounds[i], bounds[i + 1]
+        if end - start < 0.3:
+            continue
+        piece = os.path.join(td, f"piece_{i}.mp4")
+        cmd = ["ffmpeg", "-y", "-ss", f"{start:.2f}", "-to", f"{end:.2f}", "-i", in_mp4,
+               "-c:v", "libx264", "-preset", "medium", "-crf", "23",
+               "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k", "-r", "30", piece]
+        _run(cmd)
+        pieces.append(piece)
+    return pieces
+
+def insert_cutaway_clips(body_path, cutaway_paths, out_mp4, td, w=1080, h=1920):
+    """Intercala clips de avatar (cutaways, con su propio audio) DENTRO del video
+    ya armado, en puntos repartidos entre el 25% y el 80% de su duración (deja
+    margen para no pisar el hook inicial ni el cierre). No saca nada de la
+    narración — el video queda un poco más largo, con el avatar 'interviniendo'
+    un instante entre dos frases narradas."""
+    if not cutaway_paths:
+        return body_path
+    total = audio_duration(body_path)
+    n = len(cutaway_paths)
+    margin_lo, margin_hi = total * 0.25, total * 0.80
+    span = max(0.1, margin_hi - margin_lo)
+    cut_times = [margin_lo + span * (i + 1) / (n + 1) for i in range(n)]
+    pieces = split_video(body_path, cut_times, td)
+    parts = []
+    for i, piece in enumerate(pieces):
+        parts.append(piece)
+        if i < len(cutaway_paths):
+            parts.append(cutaway_paths[i])
+    return concat_parts(parts, out_mp4, w=w, h=h)
 
 def compose_from_images(images, audio_mp3, ass_path, out_mp4, w=1080, h=1920, music=None):
     """Render con IMÁGENES propias del usuario: Ken Burns (zoom/paneo) secuenciado + voz + subs."""
