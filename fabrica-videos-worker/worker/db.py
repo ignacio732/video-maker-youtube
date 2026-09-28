@@ -374,6 +374,69 @@ def add_segment_visuals(vid, segs, visual_list):
         except Exception as e:
             print("add_segment_visuals falló:", e)
 
+# ---- Avatar / UGC: pool de clips pre-generados (Higgsfield) por canal ----
+def add_avatar_clip(cid, clip_url, mode, hook_pattern, wardrobe, voice_archetype,
+                    duration_seconds=None, transcript=None):
+    """Guarda en el pool un clip de avatar ya generado y subido a Storage —
+    lo llama el job periódico de generación (Higgsfield), no el worker."""
+    return _post("avatar_clips", {
+        "channel_id": cid, "clip_url": clip_url, "mode": mode,
+        "hook_pattern": hook_pattern, "wardrobe": wardrobe,
+        "voice_archetype": voice_archetype, "duration_seconds": duration_seconds,
+        "transcript": transcript, "times_used": 0,
+    })[0]
+
+def count_avatar_clips(cid, mode=None):
+    params = {"channel_id": f"eq.{cid}", "select": "id"}
+    if mode:
+        params["mode"] = f"eq.{mode}"
+    return len(_get("avatar_clips", params))
+
+def channels_needing_avatar_clips(min_pool=6):
+    """Canales con avatar activado que tienen menos de min_pool clips utilizables
+    en el pool para alguno de sus modos configurados — candidatos para que el job
+    periódico de generación (Higgsfield) les sume clips nuevos. 'full' no usa pool
+    (se genera bajo demanda, es cara en créditos) así que no se contempla acá."""
+    chs = _get("channels", {"avatar_enabled": "eq.true", "active": "eq.true", "select": "*"})
+    out = []
+    for ch in chs:
+        mode = (ch.get("avatar_mode") or "intro").lower()
+        if mode == "full":
+            continue
+        modes = ["intro", "outro"] if mode == "intro_outro" else [mode]
+        needs = {m: count_avatar_clips(ch["id"], m) for m in modes}
+        if any(n < min_pool for n in needs.values()):
+            out.append({**ch, "_avatar_pool_needs": needs})
+    return out
+
+def get_ready_avatar_clip(cid, mode="intro"):
+    """Devuelve un clip listo del pool de este canal para el modo pedido, rotando:
+    evita repetir el mismo patrón de hook o el mismo vestuario que la última vez
+    (channels.avatar_last_hook_pattern / avatar_last_wardrobe) y, entre los que
+    cumplen eso, prioriza los menos usados (times_used) para repartir el uso
+    parejo en vez de gastar siempre el primero del pool. None si el pool está
+    vacío para ese canal/modo (el llamador debe seguir sin avatar en ese caso,
+    nunca bloquear el video por esto)."""
+    ch = get_channel(cid) or {}
+    rows = _get("avatar_clips", {"channel_id": f"eq.{cid}", "mode": f"eq.{mode}",
+                                 "select": "*", "order": "times_used.asc", "limit": "20"})
+    if not rows:
+        return None
+    last_hook = ch.get("avatar_last_hook_pattern")
+    last_wardrobe = ch.get("avatar_last_wardrobe")
+    fresh = [r for r in rows if r.get("hook_pattern") != last_hook and r.get("wardrobe") != last_wardrobe]
+    pool = fresh or [r for r in rows if r.get("hook_pattern") != last_hook] or rows
+    min_used = min(r.get("times_used") or 0 for r in pool)
+    least_used = [r for r in pool if (r.get("times_used") or 0) == min_used]
+    import random
+    return random.choice(least_used)
+
+def mark_avatar_clip_used(clip_id, times_used=0):
+    from datetime import datetime, timezone
+    return _patch("avatar_clips", {"id": f"eq.{clip_id}"},
+                 {"times_used": (times_used or 0) + 1,
+                  "last_used_at": datetime.now(timezone.utc).isoformat()})
+
 def get_visual_learnings(cid, min_sample=3):
     """¿El gancho (segmento 0) con escena humana concreta rinde mejor que uno abstracto/
     diagrama en este canal? Compara el promedio de vistas de ambos grupos. Devuelve None
