@@ -651,7 +651,7 @@ def process_video(v):
         #    Canales AUTÓNOMOS no publican acá: los publica run_scheduled_publishing()
         #    respetando el ritmo configurado (si no, se publicarían todos juntos apenas
         #    terminan de renderizarse, sin ninguna cadencia real).
-        db.set_status(vid, "ready")
+        db.update_video(vid, status="ready", error=None)  # limpia avisos de reintentos previos
         if not ch.get("autonomous"):
             publish_video(vid, ch, data, video_url, thumb_url, vtype=vtype)
 
