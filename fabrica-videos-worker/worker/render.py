@@ -54,8 +54,21 @@ async def _synth(text, voice, out_mp3, rate=None):
 
 def synth_voice(text, voice, out_mp3, rate=None):
     """Genera mp3 y devuelve lista de palabras con start/end en segundos.
-    rate: '+0%' = velocidad nativa de la voz; default TTS_RATE (-10%) si no se pasa nada."""
-    return asyncio.run(_synth(text, voice, out_mp3, rate=rate))
+    rate: '+0%' = velocidad nativa de la voz; default TTS_RATE (-10%) si no se pasa nada.
+    Reintenta ante cortes transitorios del servicio de Microsoft (403 por token/reloj,
+    resets de websocket, respuesta sin audio) antes de dar el video por perdido."""
+    import time
+    last = None
+    for attempt in range(3):
+        try:
+            words = asyncio.run(_synth(text, voice, out_mp3, rate=rate))
+            if os.path.exists(out_mp3) and os.path.getsize(out_mp3) > 0:
+                return words
+            last = RuntimeError("edge-tts no devolvió audio")
+        except Exception as e:
+            last = e
+        time.sleep(3 * (attempt + 1))
+    raise last
 
 # ------------------------------------------------------------------- SUBTÍTULOS
 def _group_words(words, max_chars=16):
