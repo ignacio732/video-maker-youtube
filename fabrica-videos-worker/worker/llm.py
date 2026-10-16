@@ -258,7 +258,7 @@ REGLAS PARA LAS KEYWORDS DE STOCK (clave para la credibilidad del video):
   (ej. "metal coil spring" en vez de "spring"; "ink cartridge tube" en vez de "tube")."""
 
 def _extract_json(s):
-    s = s.strip()
+    s = re.sub(r"<think>.*?</think>", "", s or "", flags=re.DOTALL).strip()
     m = re.search(r"\{.*\}", s, re.DOTALL)
     if m:
         s = m.group(0)
@@ -268,17 +268,54 @@ class LLMQuotaExhausted(RuntimeError):
     """Todos los proveedores/modelos de LLM devolvieron límite de cupo. Es TRANSITORIO:
     el video no está roto, hay que reintentarlo más tarde (no marcarlo fallido)."""
 
-def _groq(messages, model=None):
+def _groq(messages, model=None, json_mode=True):
     key = os.environ["GROQ_API_KEY"]
+    body = {"model": model or GROQ_MODEL, "messages": messages, "temperature": 0.9}
+    if json_mode:
+        body["response_format"] = {"type": "json_object"}
     r = requests.post("https://api.groq.com/openai/v1/chat/completions",
-        headers={"Authorization": f"Bearer {key}"},
-        json={"model": model or GROQ_MODEL, "messages": messages, "temperature": 0.9,
-              "response_format": {"type": "json_object"}}, timeout=90)
+        headers={"Authorization": f"Bearer {key}"}, json=body, timeout=90)
     if r.status_code >= 400:
         # Incluir el cuerpo de la respuesta: sin esto, un 400 no dice POR QUÉ
         # (ej. filtro de contenido, schema inválido, modelo caído) y hay que adivinar.
         raise RuntimeError(f"Groq {r.status_code}: {r.text[:600]}")
     return r.json()["choices"][0]["message"]["content"]
+
+_GROQ_MODELS_CACHE = None
+def _groq_available():
+    """Modelos de chat que Groq ofrece HOY a esta cuenta (Groq da de baja y suma modelos
+    seguido; con esto la cadena de respaldo no queda apuntando a nombres que ya no existen)."""
+    global _GROQ_MODELS_CACHE
+    if _GROQ_MODELS_CACHE is not None:
+        return _GROQ_MODELS_CACHE
+    try:
+        r = requests.get("https://api.groq.com/openai/v1/models",
+                         headers={"Authorization": f"Bearer {os.environ['GROQ_API_KEY']}"}, timeout=20)
+        ids = [m.get("id") for m in r.json().get("data", []) if m.get("active", True)]
+        skip = ("whisper", "tts", "guard", "playai", "orpheus", "distil", "compound", "allam")
+        # fuera también los modelos chicos (1b-9b): escriben guiones flojos
+        _GROQ_MODELS_CACHE = [i for i in ids if i and not any(k in i.lower() for k in skip)
+                              and not re.search(r"(?<![0-9])[1-9]b(?![0-9])", i.lower())]
+    except Exception:
+        _GROQ_MODELS_CACHE = []
+    return _GROQ_MODELS_CACHE
+
+def _groq_chain():
+    preferred = [GROQ_MODEL] + [m for m in GROQ_FALLBACK_MODELS if m != GROQ_MODEL]
+    avail = _groq_available()
+    if not avail:
+        return preferred
+    chain = [m for m in preferred if m in avail]
+    # Si de la lista preferida quedan pocos, sumar otros modelos grandes disponibles
+    big = sorted([m for m in avail if m not in chain],
+                 key=lambda m: (0 if re.search(r"(120b|70b|72b|kimi|235b|32b|scout|maverick)", m) else 1, m))
+    return chain + big[:max(0, 5 - len(chain))]
+
+def _short_err(e):
+    t = str(e)
+    m = re.search(r'"message":"([^"]{0,110})', t)
+    code = re.match(r"(Groq|Gemini) (\d{3})", t)
+    return f"{code.group(2) if code else ''} {m.group(1) if m else t[:110]}".strip()
 
 def _gemini(messages):
     key = os.environ["GEMINI_API_KEY"]
@@ -300,35 +337,42 @@ def _call(messages):
     """Llama al LLM con cadena de respaldo, para que un límite de cupo o un JSON mal
     formado no tire el video entero:
       1) proveedor principal (Groq GROQ_MODEL, o Gemini si LLM_PROVIDER=gemini)
-      2) modelos alternativos de Groq (cupo diario independiente por modelo)
+      2) otros modelos de Groq disponibles HOY (cupo diario independiente por modelo)
       3) Gemini, si hay GEMINI_API_KEY
     - 429 por tokens/minuto: espera unos segundos y reintenta el mismo modelo.
     - 429 por tokens/día: pasa directo al siguiente modelo.
-    - 400 json_validate_failed: reintenta una vez y después pasa al siguiente.
+    - JSON inválido (modo json estricto de Groq): reintenta el mismo modelo en modo libre
+      y valida que la respuesta sea JSON parseable.
     Si todo falla por cupo -> LLMQuotaExhausted (transitorio)."""
     import time
     chain = []
     if PROVIDER == "gemini" and os.environ.get("GEMINI_API_KEY"):
         chain.append(("gemini", GEMINI_MODEL))
     if os.environ.get("GROQ_API_KEY"):
-        for m in [GROQ_MODEL] + [m for m in GROQ_FALLBACK_MODELS if m != GROQ_MODEL]:
-            chain.append(("groq", m))
+        chain += [("groq", m) for m in _groq_chain()]
     if PROVIDER != "gemini" and os.environ.get("GEMINI_API_KEY"):
         chain.append(("gemini", GEMINI_MODEL))
     if not chain:
         raise RuntimeError("No hay ninguna API key de LLM configurada (GROQ_API_KEY / GEMINI_API_KEY)")
     errors, all_quota = [], True
     for prov, model in chain:
+        json_mode = True
         for attempt in range(3):
             try:
-                if prov == "groq":
-                    return _groq(messages, model)
-                return _gemini(messages)
+                out = _groq(messages, model, json_mode=json_mode) if prov == "groq" else _gemini(messages)
+                _extract_json(out)  # validar antes de devolver
+                return out
             except Exception as e:
                 t = str(e).lower()
-                errors.append(f"{prov}:{model}: {str(e)[:160]}")
+                errors.append(f"{model}: {_short_err(e)}")
+                if isinstance(e, (ValueError, json.JSONDecodeError)) and "groq" not in t:
+                    all_quota = False
+                    if attempt < 2:
+                        continue  # respuesta no-JSON: reintentar
+                    break
                 if (" 404" in t or "model_not_found" in t or "decommissioned" in t
                         or "does not exist" in t or "request too large" in t or " 413" in t):
+                    all_quota = False if " 404" in t or "not_found" in t else all_quota
                     break  # modelo dado de baja o prompt muy grande para su cupo -> siguiente
                 if _is_quota(e):
                     if ("per minute" in t or "(tpm)" in t or "(rpm)" in t) and attempt < 2:
@@ -337,13 +381,15 @@ def _call(messages):
                         continue
                     break  # cupo diario agotado en este modelo -> siguiente
                 all_quota = False
-                if ("json_validate" in t or "failed to generate json" in t) and attempt < 1:
+                if ("json_validate" in t or "failed to generate json" in t or "failed to validate json" in t) \
+                        and json_mode and prov == "groq":
+                    json_mode = False  # el modo JSON estricto de Groq falla con algunos modelos
                     continue
                 if attempt < 1 and (" 5" in t[:12] or "timeout" in t or "timed out" in t):
                     time.sleep(5)
                     continue
                 break
-    msg = " | ".join(errors[-6:])
+    msg = " | ".join(errors[-8:])
     if all_quota:
         raise LLMQuotaExhausted(f"Cupo de LLM agotado en todos los modelos: {msg}")
     raise RuntimeError(f"LLM falló en todos los modelos: {msg}")
