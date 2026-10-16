@@ -250,7 +250,10 @@ def process_video(v):
             trend_topics = None
             reference_url = None
             research_context = None
-            if not v.get("title"):
+            # Link pegado a mano en "Nuevo video" (noticia, artículo, web): el video se
+            # arma sobre ESA página — no se buscan tendencias ni se cambia de tema.
+            link_url = "" if v.get("seed_trend_id") else (v.get("source_url") or "").strip()
+            if not v.get("title") and not link_url:
                 try:
                     found = trends.for_channel(ch, 8)
                     # No volver a ofrecer un titular cuya URL ya se usó como fuente de un
@@ -300,8 +303,28 @@ def process_video(v):
                            else "No se pudo leer el artículo original (paywall o formato no soportado); "
                                 "se sigue solo con el titular",
                            "info" if research_context else "warn", vid, ch["id"])
+            seed_title = v.get("title")
+            if link_url:
+                info = trends.fetch_page_info(link_url)
+                if not info or not (info.get("text") or info.get("description")):
+                    if not seed_title:
+                        raise RuntimeError(f"No se pudo leer el link ({link_url}): la página no devolvió "
+                                           "texto (bloqueo, login o paywall). Probá con otro link o "
+                                           "agregá un título/tema.")
+                    db.log("link", f"No se pudo leer el link; se genera solo con el título pedido",
+                           "warn", vid, ch["id"])
+                else:
+                    reference_url = link_url
+                    research_context = "\n".join(x for x in (
+                        f"Título de la página: {info['title']}" if info.get("title") else "",
+                        f"Resumen: {info['description']}" if info.get("description") else "",
+                        info.get("text") or "") if x)
+                    if not seed_title:
+                        seed_title = (info.get("title") or "")[:140] or None
+                    db.log("link", f"Link leído OK ({len(info.get('text') or '')} caracteres): "
+                                   f"{info.get('title') or link_url}", vid=vid, cid=ch["id"])
             try:
-                data = llm.generate(ch, vtype, seed_title=v.get("title"), trends=trend_topics,
+                data = llm.generate(ch, vtype, seed_title=seed_title, trends=trend_topics,
                                     recent_titles=recent_titles, top_performers=top_performers,
                                     visual_learning=visual_learning, research_context=research_context,
                                     recent_hooks=recent_hooks)
@@ -314,7 +337,7 @@ def process_video(v):
                     # en vez de perder el video entero.
                     db.log("script", f"Guion con tendencias falló ({e}); reintentando sin tendencias",
                            "warn", vid, ch["id"])
-                    data = llm.generate(ch, vtype, seed_title=v.get("title"), trends=None,
+                    data = llm.generate(ch, vtype, seed_title=seed_title, trends=None,
                                         recent_titles=recent_titles, top_performers=top_performers,
                                         visual_learning=visual_learning, research_context=research_context,
                                         recent_hooks=recent_hooks)
@@ -350,9 +373,20 @@ def process_video(v):
         # 2) VOZ + timings
         db.set_status(vid, "voicing")
         mp3 = os.path.join(td, "voz.mp3")
-        words = render.synth_voice(data["full_text"], ch.get("voice") or _default_voice(ch), mp3)
+        # Voz y ritmo: lo elegido para ESTE video (dashboard → Nuevo video) tiene prioridad;
+        # si no, lo del canal; si no, el default por idioma / TTS_RATE.
+        channel_voice = ch.get("voice") or _default_voice(ch)
+        voice = (v.get("voice") or "").strip() or channel_voice
+        rate = (v.get("voice_rate") or "").strip() or (ch.get("voice_rate") or "").strip() or None
+        words, used_voice = render.synth_voice(data["full_text"], voice, mp3, rate=rate,
+                                               fallback_voice=channel_voice,
+                                               style=ch.get("tone"), with_voice=True)
         dur = render.audio_duration(mp3)
-        db.log("voice", f"Voz {dur:.0f}s, {len(words)} palabras", vid=vid, cid=ch["id"])
+        if used_voice != voice:
+            db.log("voice", f"La voz {voice} no estuvo disponible; se usó {used_voice}", "warn",
+                   vid, ch["id"])
+        db.log("voice", f"Voz {dur:.0f}s, {len(words)} palabras — {used_voice}, ritmo "
+                        f"{rate or render.TTS_RATE}", vid=vid, cid=ch["id"])
 
         # 3) SUBTÍTULOS
         w, h = (1080, 1920) if vtype == "short" else (1920, 1080)
