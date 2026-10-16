@@ -8,7 +8,11 @@ import trends as _trends
 
 PROVIDER = os.environ.get("LLM_PROVIDER", "groq").lower()
 GROQ_MODEL = os.environ.get("GROQ_MODEL", "openai/gpt-oss-120b")
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-1.5-flash")
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+# Modelos alternativos de Groq: cada modelo tiene su PROPIO cupo diario (TPD), así que si el
+# principal se agota se sigue generando con otro en vez de fallar todos los videos del día.
+GROQ_FALLBACK_MODELS = [m.strip() for m in os.environ.get(
+    "GROQ_FALLBACK_MODELS", "llama-3.3-70b-versatile,openai/gpt-oss-20b,qwen/qwen3-32b").split(",") if m.strip()]
 
 SYSTEM = (
     "Sos el mejor guionista de YouTube Shorts virales, experto en retención y en el "
@@ -260,11 +264,15 @@ def _extract_json(s):
         s = m.group(0)
     return json.loads(s)
 
-def _groq(messages):
+class LLMQuotaExhausted(RuntimeError):
+    """Todos los proveedores/modelos de LLM devolvieron límite de cupo. Es TRANSITORIO:
+    el video no está roto, hay que reintentarlo más tarde (no marcarlo fallido)."""
+
+def _groq(messages, model=None):
     key = os.environ["GROQ_API_KEY"]
     r = requests.post("https://api.groq.com/openai/v1/chat/completions",
         headers={"Authorization": f"Bearer {key}"},
-        json={"model": GROQ_MODEL, "messages": messages, "temperature": 0.9,
+        json={"model": model or GROQ_MODEL, "messages": messages, "temperature": 0.9,
               "response_format": {"type": "json_object"}}, timeout=90)
     if r.status_code >= 400:
         # Incluir el cuerpo de la respuesta: sin esto, un 400 no dice POR QUÉ
@@ -283,6 +291,62 @@ def _gemini(messages):
     if r.status_code >= 400:
         raise RuntimeError(f"Gemini {r.status_code}: {r.text[:600]}")
     return r.json()["candidates"][0]["content"]["parts"][0]["text"]
+
+def _is_quota(err):
+    t = str(err).lower()
+    return (" 429" in t or "rate limit" in t or "resource_exhausted" in t or "quota" in t)
+
+def _call(messages):
+    """Llama al LLM con cadena de respaldo, para que un límite de cupo o un JSON mal
+    formado no tire el video entero:
+      1) proveedor principal (Groq GROQ_MODEL, o Gemini si LLM_PROVIDER=gemini)
+      2) modelos alternativos de Groq (cupo diario independiente por modelo)
+      3) Gemini, si hay GEMINI_API_KEY
+    - 429 por tokens/minuto: espera unos segundos y reintenta el mismo modelo.
+    - 429 por tokens/día: pasa directo al siguiente modelo.
+    - 400 json_validate_failed: reintenta una vez y después pasa al siguiente.
+    Si todo falla por cupo -> LLMQuotaExhausted (transitorio)."""
+    import time
+    chain = []
+    if PROVIDER == "gemini" and os.environ.get("GEMINI_API_KEY"):
+        chain.append(("gemini", GEMINI_MODEL))
+    if os.environ.get("GROQ_API_KEY"):
+        for m in [GROQ_MODEL] + [m for m in GROQ_FALLBACK_MODELS if m != GROQ_MODEL]:
+            chain.append(("groq", m))
+    if PROVIDER != "gemini" and os.environ.get("GEMINI_API_KEY"):
+        chain.append(("gemini", GEMINI_MODEL))
+    if not chain:
+        raise RuntimeError("No hay ninguna API key de LLM configurada (GROQ_API_KEY / GEMINI_API_KEY)")
+    errors, all_quota = [], True
+    for prov, model in chain:
+        for attempt in range(3):
+            try:
+                if prov == "groq":
+                    return _groq(messages, model)
+                return _gemini(messages)
+            except Exception as e:
+                t = str(e).lower()
+                errors.append(f"{prov}:{model}: {str(e)[:160]}")
+                if _is_quota(e):
+                    if ("per minute" in t or "(tpm)" in t or "(rpm)" in t) and attempt < 2:
+                        m = re.search(r"try again in ([0-9.]+)s", t)
+                        time.sleep(min(30.0, float(m.group(1)) + 1) if m else 10)
+                        continue
+                    break  # cupo diario agotado en este modelo -> siguiente
+                all_quota = False
+                if ("json_validate" in t or "failed to generate json" in t) and attempt < 1:
+                    continue
+                if (" 404" in t or "model_not_found" in t or "decommissioned" in t
+                        or "does not exist" in t):
+                    break  # modelo dado de baja -> siguiente
+                if attempt < 1 and (" 5" in t[:12] or "timeout" in t or "timed out" in t):
+                    time.sleep(5)
+                    continue
+                break
+    msg = " | ".join(errors[-6:])
+    if all_quota:
+        raise LLMQuotaExhausted(f"Cupo de LLM agotado en todos los modelos: {msg}")
+    raise RuntimeError(f"LLM falló en todos los modelos: {msg}")
 
 def metadata_for_own_script(narracion, channel, title=None, thumb_text=None):
     """
@@ -312,7 +376,7 @@ def metadata_for_own_script(narracion, channel, title=None, thumb_text=None):
     )
     messages = [{"role": "system", "content": "Respondés SIEMPRE en JSON válido, sin texto extra."},
                 {"role": "user", "content": prompt}]
-    raw = _gemini(messages) if PROVIDER == "gemini" else _groq(messages)
+    raw = _call(messages)
     data = _extract_json(raw)
     if title:
         data["title"] = title
@@ -364,7 +428,7 @@ def visuals_for_own_script(texts, niche=""):
     )
     messages = [{"role": "system", "content": "Respondés SIEMPRE en JSON válido, sin texto extra."},
                 {"role": "user", "content": prompt}]
-    raw = _gemini(messages) if PROVIDER == "gemini" else _groq(messages)
+    raw = _call(messages)
     data = _extract_json(raw)
     kws = data.get("keywords") or []
     if len(kws) < len(texts):
@@ -393,7 +457,7 @@ def alt_hook(data, channel):
     )
     messages = [{"role": "system", "content": "Respondés SIEMPRE en JSON válido, sin texto extra."},
                 {"role": "user", "content": prompt}]
-    raw = _gemini(messages) if PROVIDER == "gemini" else _groq(messages)
+    raw = _call(messages)
     alt = (_extract_json(raw).get("hook") or "").strip()
     return alt if alt and alt.lower() != original.strip().lower() else None
 
@@ -458,7 +522,7 @@ Devolvé SOLO un JSON con esta forma EXACTA:
 {seg_hint}
 Keywords SIEMPRE en inglés, concretas y filmables (nada abstracto)."""
     messages = [{"role": "system", "content": SYSTEM}, {"role": "user", "content": prompt}]
-    raw = _gemini(messages) if PROVIDER == "gemini" else _groq(messages)
+    raw = _call(messages)
     data = _extract_json(raw)
     data.setdefault("tags", [])
     data.setdefault("hashtags", [])
@@ -485,7 +549,7 @@ def generate(channel, vtype="short", seed_title=None, trends=None, recent_titles
                 {"role": "user", "content": _prompt(channel, vtype, seed_title, trends, recent_titles,
                                                     top_performers, visual_learning, research_context,
                                                     recent_hooks)}]
-    raw = _gemini(messages) if PROVIDER == "gemini" else _groq(messages)
+    raw = _call(messages)
     data = _extract_json(raw)
     data.setdefault("tags", [])
     data.setdefault("hashtags", [])
