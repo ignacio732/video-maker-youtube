@@ -10,6 +10,7 @@ Uso:
 import os, sys, tempfile, traceback, subprocess, math, uuid, random
 from datetime import datetime, timezone
 import db, render, trends, requests, re as _re
+import llm
 
 def _download(url, dest):
     r = requests.get(url, stream=True, timeout=90)
@@ -305,6 +306,8 @@ def process_video(v):
                                     visual_learning=visual_learning, research_context=research_context,
                                     recent_hooks=recent_hooks)
             except Exception as e:
+                if isinstance(e, llm.LLMQuotaExhausted):
+                    raise  # sin cupo, reintentar sin tendencias fallaría igual
                 if trend_topics:
                     # Si falló con tendencias (ej. una tendencia sensible que el LLM rechaza,
                     # o cualquier otro problema puntual del prompt), reintentar sin tendencias
@@ -768,6 +771,15 @@ def _autopilot_paced(ch):
     shorts_target = max(0, ch.get("shorts_per_period") if ch.get("shorts_per_period") is not None
                         else (ch.get("videos_per_period") or 3))
     longs_target = max(0, ch.get("longs_per_period") or 0)
+    recent_failed = db.count_recent_failed(ch["id"], hours=6)
+    if recent_failed >= 4:
+        # Freno anti-bucle: los fallidos no cuentan como "en cola", así que sin esto cada
+        # corrida (cada 15 min) reponía la cola con videos nuevos que volvían a fallar,
+        # quemando el cupo diario del LLM (~300 intentos/día en oct-2026).
+        if datetime.now(timezone.utc).minute < 15:
+            db.log("autopilot", f"'{ch['name']}': {recent_failed} videos fallidos en las últimas 6h — "
+                                f"no se encolan más hasta que se recupere", "warn", cid=ch["id"])
+        return
     open_short = db.count_open_videos(ch["id"], vtype="short")
     open_long = db.count_open_videos(ch["id"], vtype="long")
     made = 0
@@ -958,9 +970,35 @@ def main():
     for v in pend:
         try:
             process_video(v)
+        except llm.LLMQuotaExhausted as e:
+            # Cupo del LLM agotado en todos los modelos: el video NO está roto. Vuelve a la
+            # cola tal cual (sin sumar intento) y se corta la corrida: los siguientes
+            # fallarían igual y solo gastarían tiempo de Actions.
+            db.set_status(v["id"], "pending", f"en espera: {str(e)[:300]}")
+            db.log("run", "Cupo de LLM agotado — el video vuelve a la cola y se reintenta en la "
+                          "próxima corrida", "warn", v["id"], v.get("channel_id"))
+            break
         except Exception as e:
-            db.set_status(v["id"], "failed", str(e))
-            db.log("error", traceback.format_exc()[-800:], "error", v["id"])
+            attempts = (v.get("attempts") or 0) + 1
+            if _is_transient(e) and attempts < MAX_ATTEMPTS:
+                db.update_video(v["id"], status="pending", attempts=attempts,
+                                error=f"reintento {attempts}/{MAX_ATTEMPTS - 1}: {str(e)[:600]}")
+                db.log("run", f"Error transitorio (intento {attempts}), vuelve a la cola: {str(e)[:300]}",
+                       "warn", v["id"], v.get("channel_id"))
+            else:
+                db.update_video(v["id"], status="failed", attempts=attempts, error=str(e)[:900])
+                db.log("error", traceback.format_exc()[-800:], "error", v["id"])
+
+MAX_ATTEMPTS = 4
+
+def _is_transient(e):
+    """Errores de infraestructura (cupos, red, TTS de Microsoft) que no dependen del video:
+    conviene reintentar más tarde en vez de descartarlo y encolar otro."""
+    t = str(e).lower()
+    return any(k in t for k in (
+        " 429", "rate limit", "quota", "timeout", "timed out", "temporarily",
+        "connection", "invalid response status", "speech.platform.bing.com",
+        "no devolvió audio", " 502", " 503", " 504", "server disconnected"))
 
 if __name__ == "__main__":
     main()
