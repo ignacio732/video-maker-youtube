@@ -12,7 +12,7 @@ GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
 # Modelos alternativos de Groq: cada modelo tiene su PROPIO cupo diario (TPD), así que si el
 # principal se agota se sigue generando con otro en vez de fallar todos los videos del día.
 GROQ_FALLBACK_MODELS = [m.strip() for m in os.environ.get(
-    "GROQ_FALLBACK_MODELS", "llama-3.3-70b-versatile,openai/gpt-oss-20b,qwen/qwen3-32b").split(",") if m.strip()]
+    "GROQ_FALLBACK_MODELS", "openai/gpt-oss-20b,moonshotai/kimi-k2-instruct,qwen/qwen3-32b,meta-llama/llama-4-scout-17b-16e-instruct").split(",") if m.strip()]
 
 SYSTEM = (
     "Sos el mejor guionista de YouTube Shorts virales, experto en retención y en el "
@@ -327,6 +327,9 @@ def _call(messages):
             except Exception as e:
                 t = str(e).lower()
                 errors.append(f"{prov}:{model}: {str(e)[:160]}")
+                if (" 404" in t or "model_not_found" in t or "decommissioned" in t
+                        or "does not exist" in t or "request too large" in t or " 413" in t):
+                    break  # modelo dado de baja o prompt muy grande para su cupo -> siguiente
                 if _is_quota(e):
                     if ("per minute" in t or "(tpm)" in t or "(rpm)" in t) and attempt < 2:
                         m = re.search(r"try again in ([0-9.]+)s", t)
@@ -336,9 +339,6 @@ def _call(messages):
                 all_quota = False
                 if ("json_validate" in t or "failed to generate json" in t) and attempt < 1:
                     continue
-                if (" 404" in t or "model_not_found" in t or "decommissioned" in t
-                        or "does not exist" in t):
-                    break  # modelo dado de baja -> siguiente
                 if attempt < 1 and (" 5" in t[:12] or "timeout" in t or "timed out" in t):
                     time.sleep(5)
                     continue
