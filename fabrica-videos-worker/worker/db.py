@@ -61,6 +61,16 @@ def count_open_videos(cid, vtype=None):
     rows = _get("videos", params)
     return len(rows)
 
+def count_recent_failed(cid, hours=6):
+    """Videos de este canal que fallaron en las últimas N horas — freno del autopilot:
+    si un canal viene fallando seguido (cupo de LLM, TTS caído, etc.) no se le encolan
+    más videos hasta que se recupere, para no entrar en bucle generar->fallar->reencolar."""
+    from datetime import datetime, timezone, timedelta
+    since = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+    rows = _get("videos", {"channel_id": f"eq.{cid}", "status": "eq.failed",
+                           "updated_at": f"gte.{since}", "select": "id"})
+    return len(rows)
+
 def get_recent_visual_ids(cid, limit=60):
     """IDs de stock (Pexels) usados en videos RECIENTES de este canal — para que
     fetch_visuals/fill_gaps los evite y no repita la misma foto/video de un video
