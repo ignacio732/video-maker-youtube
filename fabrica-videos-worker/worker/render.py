@@ -52,11 +52,9 @@ async def _synth(text, voice, out_mp3, rate=None):
         words.extend(_split_sentence(s["text"], s["start"], s["dur"]))
     return words
 
-def synth_voice(text, voice, out_mp3, rate=None):
-    """Genera mp3 y devuelve lista de palabras con start/end en segundos.
-    rate: '+0%' = velocidad nativa de la voz; default TTS_RATE (-10%) si no se pasa nada.
-    Reintenta ante cortes transitorios del servicio de Microsoft (403 por token/reloj,
-    resets de websocket, respuesta sin audio) antes de dar el video por perdido."""
+def _edge_synth(text, voice, out_mp3, rate=None):
+    """edge-tts con reintentos ante cortes transitorios del servicio de Microsoft
+    (403 por token/reloj, resets de websocket, respuesta sin audio)."""
     import time
     last = None
     for attempt in range(3):
@@ -69,6 +67,145 @@ def synth_voice(text, voice, out_mp3, rate=None):
             last = e
         time.sleep(3 * (attempt + 1))
     raise last
+
+def _rate_factor(rate):
+    """'-10%' -> 0.90 ; '+15%' -> 1.15 (para motores sin control de velocidad nativo)."""
+    m = re.match(r"^\s*([+-]?\d+(?:\.\d+)?)\s*%\s*$", str(rate or ""))
+    return max(0.5, min(2.0, 1.0 + float(m.group(1)) / 100.0)) if m else 1.0
+
+# --- Gemini TTS (opcional, voces "ultra-realistas") -------------------------------
+# Se activa eligiendo una voz "gemini:<Nombre>" (ej. gemini:Kore) y requiere
+# GEMINI_API_KEY en los secrets de Actions. Si falla o no hay clave, synth_voice cae a
+# la voz edge-tts del canal: el video nunca se pierde por esto.
+GEMINI_TTS_MODELS = [m.strip() for m in os.environ.get(
+    "GEMINI_TTS_MODELS",
+    "gemini-3.8-flash-tts,gemini-3.1-flash-tts-preview,gemini-2.5-flash-preview-tts").split(",") if m.strip()]
+
+def _find_audio_b64(obj):
+    """Busca recursivamente el primer bloque de audio base64 en la respuesta (sirve
+    para el formato nuevo /interactions y para el viejo generateContent)."""
+    if isinstance(obj, dict):
+        mime = str(obj.get("mime_type") or obj.get("mimeType") or "")
+        if obj.get("data") and (mime.startswith("audio") or obj.get("type") == "audio"):
+            return obj["data"], mime
+        for v in obj.values():
+            r = _find_audio_b64(v)
+            if r:
+                return r
+    elif isinstance(obj, list):
+        for v in obj:
+            r = _find_audio_b64(v)
+            if r:
+                return r
+    return None
+
+def _gemini_tts(text, voice_name, out_wav, style=None):
+    import base64, wave, requests
+    key = os.environ.get("GEMINI_API_KEY")
+    if not key:
+        raise RuntimeError("Gemini TTS: falta GEMINI_API_KEY en los secrets de Actions")
+    style = style or "narrador de video corto para redes, natural, cercano y claro"
+    errors = []
+    for model in GEMINI_TTS_MODELS:
+        try:
+            if model.startswith("gemini-3.8"):
+                body = {"model": model,
+                        "input": [{"type": "user_input", "content": [{
+                            "type": "text", "text": text,
+                            "annotations": [{"type": "speech_metadata", "style": style}]}]}],
+                        "response_format": {"type": "audio"},
+                        "generation_config": {"speech_config": [{"voice": voice_name}]}}
+                r = requests.post("https://generativelanguage.googleapis.com/v1beta/interactions",
+                                  headers={"x-goog-api-key": key}, json=body, timeout=180)
+            else:
+                body = {"contents": [{"parts": [{"text": f"Leé en voz alta, con estilo {style}:\n{text}"}]}],
+                        "generationConfig": {"responseModalities": ["AUDIO"], "speechConfig": {
+                            "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": voice_name}}}}}
+                r = requests.post(f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+                                  headers={"x-goog-api-key": key}, json=body, timeout=180)
+            if r.status_code >= 400:
+                errors.append(f"{model}: {r.status_code} {r.text[:200]}")
+                continue
+            found = _find_audio_b64(r.json())
+            if not found:
+                errors.append(f"{model}: respuesta sin audio")
+                continue
+            raw = base64.b64decode(found[0])
+            if raw[:4] == b"RIFF":
+                with open(out_wav, "wb") as f:
+                    f.write(raw)
+            else:  # PCM 16-bit mono 24 kHz sin cabecera
+                with wave.open(out_wav, "wb") as wf:
+                    wf.setnchannels(1); wf.setsampwidth(2); wf.setframerate(24000)
+                    wf.writeframes(raw)
+            return model
+        except Exception as e:
+            errors.append(f"{model}: {e}")
+    raise RuntimeError("Gemini TTS falló: " + " | ".join(errors)[:600])
+
+def _silences(path, noise="-35dB", min_d=0.18):
+    out = subprocess.run(["ffmpeg", "-hide_banner", "-i", path, "-af",
+                          f"silencedetect=noise={noise}:d={min_d}", "-f", "null", "-"],
+                         stderr=subprocess.PIPE, stdout=subprocess.DEVNULL).stderr.decode(errors="ignore")
+    starts = [float(x) for x in re.findall(r"silence_start: ([0-9.]+)", out)]
+    ends = [float(x) for x in re.findall(r"silence_end: ([0-9.]+)", out)]
+    return list(zip(starts, ends))
+
+def _align_by_silence(text, audio_path):
+    """Timings de palabra para motores que no los devuelven (Gemini): ubica las pausas
+    reales del audio, usa las más largas como cortes entre frases y reparte cada frase
+    entre sus palabras de forma proporcional. Mucho más fiel que repartir el texto
+    entero sobre la duración total (que se va desfasando)."""
+    dur = audio_duration(audio_path)
+    sents = [x.strip() for x in re.split(r"(?<=[.!?…;:])\s+", text) if x.strip()] or [text.strip()]
+    sil = _silences(audio_path)
+    speech_start, speech_end = 0.0, dur
+    if sil and sil[0][0] <= 0.05:
+        speech_start = sil[0][1]; sil = sil[1:]
+    if sil and sil[-1][1] >= dur - 0.05:
+        speech_end = sil[-1][0]; sil = sil[:-1]
+    need = len(sents) - 1
+    cuts = sorted(sorted(sil, key=lambda p: p[1] - p[0], reverse=True)[:need])
+    if len(cuts) == need and need > 0:
+        bounds = [speech_start] + [c for p in cuts for c in p] + [speech_end]
+        spans = [(bounds[2 * i], bounds[2 * i + 1]) for i in range(len(sents))]
+    else:  # sin pausas suficientes: proporcional por largo de frase
+        total = sum(len(x) for x in sents) or 1
+        t, spans = speech_start, []
+        for x in sents:
+            d = (speech_end - speech_start) * len(x) / total
+            spans.append((t, t + d)); t += d
+    words = []
+    for sent, (a, b) in zip(sents, spans):
+        words.extend(_split_sentence(sent, a, max(0.05, b - a)))
+    return words
+
+def synth_voice(text, voice, out_mp3, rate=None, fallback_voice=None, style=None, with_voice=False):
+    """Genera la locución en out_mp3 y devuelve las palabras con start/end (segundos).
+    voice: id de edge-tts (es-AR-TomasNeural, en-US-AndrewMultilingualNeural...) o
+           'gemini:<Nombre>' para Gemini TTS.
+    rate:  ritmo, ej. '-10%' (pausado), '+0%' (nativo), '+15%' (rápido). Default TTS_RATE.
+    fallback_voice: voz edge-tts a usar si la elegida falla (ej. Gemini sin clave/cupo).
+    with_voice=True devuelve (words, voz_usada)."""
+    rate = rate or TTS_RATE
+    used = voice
+    try:
+        if str(voice).startswith("gemini:"):
+            wav = out_mp3 + ".raw.wav"
+            _gemini_tts(text, voice.split(":", 1)[1], wav, style=style)
+            f = _rate_factor(rate)
+            subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", wav, "-af",
+                            f"atempo={f:.3f}", "-ar", "24000", "-ac", "1", "-b:a", "128k", out_mp3],
+                           check=True)
+            words = _align_by_silence(text, out_mp3)
+        else:
+            words = _edge_synth(text, voice, out_mp3, rate=rate)
+    except Exception:
+        if not fallback_voice or fallback_voice == voice or str(fallback_voice).startswith("gemini:"):
+            raise
+        used = fallback_voice
+        words = _edge_synth(text, fallback_voice, out_mp3, rate=rate)
+    return (words, used) if with_voice else words
 
 # ------------------------------------------------------------------- SUBTÍTULOS
 def _group_words(words, max_chars=16):
