@@ -323,6 +323,73 @@ def fetch_article_text(url, max_chars=4000):
     except Exception:
         return None
 
+def _meta(html_text, *names):
+    for n in names:
+        for pat in (r'<meta[^>]+(?:property|name)=["\']%s["\'][^>]+content=["\']([^"\']+)["\']' % re.escape(n),
+                    r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+(?:property|name)=["\']%s["\']' % re.escape(n)):
+            m = re.search(pat, html_text, flags=re.IGNORECASE)
+            if m:
+                return html.unescape(m.group(1)).strip()
+    return None
+
+def fetch_page_info(url, max_chars=6000):
+    """
+    Lee un link que el usuario pegó a mano (noticia, artículo, página de producto,
+    landing, blog...) para armar el video en base a ESA información.
+    Devuelve {"title", "description", "text"} o None si no se pudo leer nada útil.
+    A diferencia de fetch_article_text (pensada para notas de prensa), además de
+    párrafos toma títulos, listas y celdas — una web común no siempre usa <p>. Si la
+    página carga el contenido con JavaScript (el HTML viene casi vacío), se usa el
+    lector público r.jina.ai como respaldo, que la renderiza y devuelve el texto.
+    """
+    if not url:
+        return None
+    title = desc = None
+    text = ""
+    try:
+        r = requests.get(url, headers=UA, timeout=25, allow_redirects=True)
+        if r.status_code < 400 and r.text:
+            h = r.text
+            title = _meta(h, "og:title", "twitter:title")
+            if not title:
+                m = re.search(r"<title[^>]*>(.*?)</title>", h, flags=re.DOTALL | re.IGNORECASE)
+                title = html.unescape(re.sub(r"\s+", " ", m.group(1))).strip() if m else None
+            desc = _meta(h, "og:description", "description", "twitter:description")
+            body = re.sub(r"<(script|style|nav|header|footer|aside|noscript|svg|form)[^>]*>.*?</\1>", " ",
+                          h, flags=re.DOTALL | re.IGNORECASE)
+            blocks = re.findall(r"<(p|h1|h2|h3|li|td|blockquote)[^>]*>(.*?)</\1>", body,
+                                flags=re.DOTALL | re.IGNORECASE)
+            seen, parts = set(), []
+            for _, b in blocks:
+                t = re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", " ", b))).strip()
+                if len(t) >= 25 and t not in seen:
+                    seen.add(t); parts.append(t)
+            text = "\n".join(parts)
+    except Exception:
+        pass
+    if len(text) < 300:
+        try:
+            jr = requests.get("https://r.jina.ai/" + url, timeout=40,
+                              headers={"Accept": "text/plain", "X-Return-Format": "text"})
+            if jr.status_code < 400 and len(jr.text.strip()) > len(text):
+                jt = jr.text
+                m = re.search(r"^Title:\s*(.+)$", jt, flags=re.MULTILINE)
+                if m and not title:
+                    title = m.group(1).strip()
+                jt = re.split(r"^Markdown Content:\s*$", jt, maxsplit=1, flags=re.MULTILINE)[-1]
+                jt = re.sub(r"!\[[^\]]*\]\([^)]*\)", " ", jt)          # imágenes
+                jt = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", jt)        # links -> texto
+                lines = [l.strip(" #*-\t") for l in jt.splitlines()]
+                text = "\n".join(l for l in lines if len(l) >= 25)
+        except Exception:
+            pass
+    text = re.sub(r"[ \t]+", " ", text).strip()
+    if not text and not desc and not title:
+        return None
+    if len(text) < 120 and desc:
+        text = (desc + "\n" + text).strip()
+    return {"title": title, "description": desc, "text": text[:max_chars]}
+
 # ---------------------------------------------------------- SITIOS DE REFERENCIA
 # Canales de nicho puntual (ej. economía/finanzas real, no evergreen) pueden declarar
 # `reference_sites`: dominios/URLs propios de donde sacar los temas del día, sin pasar
