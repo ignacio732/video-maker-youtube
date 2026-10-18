@@ -54,6 +54,24 @@ Wearing {outfit}. {setting}.
 {lang_instruction}: "{line}"
 no on-screen text, no subtitles baked in."""
 
+# Variante para conductores de noticiero / streaming: cámara profesional de estudio,
+# luz de estudio real (pero natural, no publicitaria). Se usa cuando el canal tiene
+# avatar_persona = 'news_anchor' (ver PERSONAS).
+STUDIO_MODULE = """Shot as a real live news / financial streaming broadcast: locked-off professional
+broadcast camera on a tripod in native vertical framing, medium shot from the waist up,
+clean natural image with true skin texture (no beauty filter, no plastic skin), realistic
+dynamic range, no cinematic lens flares, no teal-orange grade, no film LUT.
+Lighting: {lighting} — soft, even, credible studio light, single consistent key direction
+with gentle fill, natural skin tones, no dramatic rim light, no glamour glow.
+The set must be plausible and consistent for a serious Argentine economy news program —
+real furniture and screens, nothing random or mismatched, no readable on-screen text,
+no channel logos, no lower-thirds.
+Wearing {outfit}. {setting}.
+{staging}
+{voice_note}
+{lang_instruction}: "{line}"
+no on-screen text, no subtitles baked in."""
+
 # ---- Patrones de hook (apertura) — pensados para RETENCIÓN en los primeros 2-3s ----
 HOOK_PATTERNS = {
     "confesion": {
@@ -239,6 +257,11 @@ VOICE_ARCHETYPES = {
             "cadence, more emphatic hand gestures, engaging and animated but never fake or screamy.",
     "calm": "Calm, measured, low-key delivery — slower pace, quieter confident tone, minimal "
            "gestures, like sharing something thoughtfully rather than performing.",
+    "anchor": "Professional news-anchor delivery with a natural Rioplatense (Buenos Aires, "
+              "Argentina) Spanish accent and voseo: clear diction, confident and credible, "
+              "semi-formal and warm like a modern financial streaming host — steady pace, "
+              "small natural head movements and restrained hand gestures, never salesy, "
+              "never shouting, never a neutral or Spain Spanish accent.",
 }
 
 # ---- Vestuario + escena + luz, agrupados en familias coherentes entre sí ----
@@ -274,11 +297,115 @@ WARDROBE = {
                         "setting": "sitting on a park bench, greenery softly out of focus behind",
                         "light": "natural daylight, partly cloudy"},
 }
+WARDROBE.update({
+    "na_navy_blazer_desk": {"outfit": "a tailored navy blazer over a white silk blouse, small gold stud earrings",
+                            "setting": "seated at a modern news desk, a large screen behind her showing abstract green and red market chart lines, Buenos Aires skyline softly out of focus",
+                            "light": "soft frontal studio key light with warm practical lights in the background"},
+    "na_camel_blazer_standing": {"outfit": "a camel blazer over a black fitted top, thin gold necklace",
+                                 "setting": "standing beside a tall video wall with abstract currency and market graphics, modern studio set softly out of focus",
+                                 "light": "even soft studio light, neutral white balance"},
+    "na_white_shirt_stream": {"outfit": "a crisp white button-up shirt, sleeves slightly rolled, a smartwatch",
+                              "setting": "a semi-formal streaming studio desk with a broadcast microphone on an arm, a laptop and a mug, warm shelves and plants softly out of focus",
+                              "light": "warm soft studio light, cozy evening streaming ambience"},
+    "na_black_blazer_night": {"outfit": "a black blazer over an ivory blouse",
+                              "setting": "seated at the news desk at night, large window behind with Buenos Aires city lights and the Obelisco area softly out of focus",
+                              "light": "soft frontal key light with cool night ambience from the window"},
+    "na_burgundy_knit_stream": {"outfit": "a fitted burgundy knit top with a delicate necklace",
+                                "setting": "a streaming studio set with a broadcast microphone, a monitor showing abstract price lines, neon-free warm lamp in the background",
+                                "light": "soft key light mixed with a warm desk lamp"},
+    "na_grey_suit_newsroom": {"outfit": "a light grey suit jacket over a pale blue blouse",
+                              "setting": "standing in a working newsroom, desks and monitors softly out of focus behind her",
+                              "light": "clean bright office studio light"},
+})
+
 WARDROBE_FAMILIES = {
     "home_casual": ["hc_sweater_living", "hc_hoodie_balcony", "hc_tshirt_kitchen", "hc_sweater_couch_night"],
     "office_smart": ["os_shirt_desk", "os_blazer_shelf", "os_cardigan_desk_evening"],
     "outdoor_casual": ["oc_jacket_street", "oc_hoodie_car", "oc_sweater_park"],
+    "news_studio": ["na_navy_blazer_desk", "na_camel_blazer_standing", "na_white_shirt_stream",
+                    "na_black_blazer_night", "na_burgundy_knit_stream", "na_grey_suit_newsroom"],
 }
+
+# ---- Personas: cambian el REGISTRO de todo el avatar (ganchos, cierre, set, cámara).
+# 'ugc' = creador casual grabándose con el celular (default, lo de siempre).
+# 'news_anchor' = conductora/or de noticiero o streaming económico semi-formal: ganchos
+# genéricos (sirven para cualquier noticia del día, el clip se reutiliza en muchos
+# videos), sin cifras inventadas, voseo rioplatense.
+NEWS_HOOKS = {
+    "apertura_noticiero": {
+        "label": "Apertura de noticiero",
+        "staging": "Opens like the top of a live news segment — a small composed nod, steady "
+                   "eye contact with the lens, hands resting on the desk, then starts speaking.",
+        "lines": {"es": ["Buenas, ¿cómo están? Arrancamos con lo que tenés que saber del dólar hoy.",
+                         "Hola, bienvenidos. Vamos con lo más importante que se movió hoy en la economía."],
+                  "en": ["Hi everyone, welcome. Let's start with what you need to know today."],
+                  "pt": ["Olá, bem-vindos. Vamos ao que você precisa saber hoje."]},
+    },
+    "ultimo_momento": {
+        "label": "Último momento",
+        "staging": "Slight lean toward the camera with focused urgency, glancing down at notes for "
+                   "a split second, then back to the lens — breaking-news energy, composed.",
+        "lines": {"es": ["Atención, porque esto acaba de pasar y te impacta directo en el bolsillo.",
+                         "Último momento: hay un movimiento en el mercado que tenés que conocer."],
+                  "en": ["Breaking: there's a move in the market you need to know about."],
+                  "pt": ["Atenção, isso acabou de acontecer e mexe direto no seu bolso."]},
+    },
+    "pregunta_conductora": {
+        "label": "Pregunta al espectador",
+        "staging": "A slight head tilt and a knowing, professional half-smile, asking the viewer "
+                   "directly as a host would at the start of a segment.",
+        "lines": {"es": ["¿Te preguntaste por qué el dólar se mueve así? Te lo explico en un minuto.",
+                         "¿Qué conviene hacer hoy con tus pesos? Vamos a verlo."],
+                  "en": ["Ever wondered why the market moves like this? I'll explain in a minute."],
+                  "pt": ["Você já se perguntou por que o mercado se mexe assim? Eu explico."]},
+    },
+    "dato_clave": {
+        "label": "Dato clave",
+        "staging": "Points briefly toward the screen behind or beside her, then turns back to the "
+                   "lens — presenting a key fact like a host introducing a graphic.",
+        "lines": {"es": ["Hay un dato de hoy que casi nadie está mirando, y es clave.",
+                         "Mirá este dato, porque explica todo lo que está pasando."],
+                  "en": ["There's one data point today almost nobody is watching, and it's key."],
+                  "pt": ["Tem um dado de hoje que quase ninguém está olhando, e é chave."]},
+    },
+    "advertencia_formal": {
+        "label": "Advertencia (formal)",
+        "staging": "Serious, calm expression, one hand slightly raised in a measured 'hold on' "
+                   "gesture — a credible, responsible warning, not alarmist.",
+        "lines": {"es": ["Antes de comprar o vender dólares hoy, escuchá esto.",
+                         "Ojo con lo que viene, porque puede cambiar tus planes de esta semana."],
+                  "en": ["Before you buy or sell today, listen to this."],
+                  "pt": ["Antes de comprar ou vender hoje, escuta isso."]},
+    },
+    "resumen_rapido": {
+        "label": "Resumen en 30 segundos",
+        "staging": "Brisk, confident host energy, a quick smile and a small 'let's go' hand "
+                   "gesture, like kicking off a fast recap segment.",
+        "lines": {"es": ["Te resumo en treinta segundos qué pasó hoy con el dólar.",
+                         "Vamos rápido: esto es lo que tenés que saber de la economía hoy."],
+                  "en": ["Here's today's recap in thirty seconds."],
+                  "pt": ["Resumo em trinta segundos o que aconteceu hoje."]},
+    },
+}
+NEWS_OUTRO = {
+    "label": "Cierre de conductora",
+    "staging": "Warm, composed sign-off like the end of a news segment — a small genuine smile, "
+               "a slight nod, hands together on the desk or a brief open-hand gesture.",
+    "lines": {"es": ["Esto fue todo por hoy. Seguinos para no perderte el próximo resumen.",
+                     "Si te sirvió, compartilo con alguien que lo necesite. Nos vemos mañana.",
+                     "Contanos en los comentarios qué vas a hacer con tus ahorros. Hasta la próxima.",
+                     "Te dejo esto para pensar. Seguinos y mañana te cuento cómo sigue."],
+              "en": ["That's all for today. Follow so you don't miss the next update."],
+              "pt": ["Isso é tudo por hoje. Siga para não perder o próximo resumo."]},
+}
+PERSONAS = {
+    "ugc": {"hooks": HOOK_PATTERNS, "outro": OUTRO, "module": REALISM_MODULE,
+            "voice": None, "wardrobe_family": None},
+    "news_anchor": {"hooks": NEWS_HOOKS, "outro": NEWS_OUTRO, "module": STUDIO_MODULE,
+                    "voice": "anchor", "wardrobe_family": "news_studio"},
+}
+def _persona(channel):
+    return PERSONAS.get((channel.get("avatar_persona") or "ugc").lower(), PERSONAS["ugc"])
 
 # Opciones para selectores de configuración (dashboard)
 HOOK_STYLE_CHOICES = [("auto_rotate", "Rotación automática (recomendado)")] + \
@@ -286,10 +413,13 @@ HOOK_STYLE_CHOICES = [("auto_rotate", "Rotación automática (recomendado)")] + 
 WARDROBE_STYLE_CHOICES = [("mixed", "Mezclado — máxima variedad (recomendado)"),
                           ("home_casual", "Casual en casa"),
                           ("office_smart", "Smart casual / oficina"),
-                          ("outdoor_casual", "Casual al aire libre")]
+                          ("outdoor_casual", "Casual al aire libre"),
+                          ("news_studio", "Estudio de noticias / streaming")]
 VOICE_ARCHETYPE_CHOICES = [("natural", "Natural (recomendado)"),
                            ("hyped", "Hyped / alta energía"),
-                           ("calm", "Calma / pausada")]
+                           ("calm", "Calma / pausada"),
+                           ("anchor", "Conductora/or de noticiero (rioplatense)")]
+PERSONA_CHOICES = [("ugc", "Creador UGC casual"), ("news_anchor", "Conductora/or de noticiero / streaming")]
 
 
 def _lang_key(channel):
@@ -307,6 +437,9 @@ def _lang_instruction(lang):
 
 def _wardrobe_pool_for(channel):
     style = (channel.get("avatar_wardrobe_style") or "mixed").lower()
+    fam = _persona(channel)["wardrobe_family"]
+    if fam and style not in WARDROBE_FAMILIES:
+        style = fam  # una persona de noticiero nunca cae en el living/parque del UGC
     if style in WARDROBE_FAMILIES:
         return {k: WARDROBE[k] for k in WARDROBE_FAMILIES[style]}
     return dict(WARDROBE)  # 'mixed' o valor no reconocido: pool completo
@@ -326,12 +459,13 @@ def pick_hook_pattern(channel):
     """Si avatar_hook_style está fijado a un patrón puntual, siempre usa ese.
     Si es 'auto_rotate' (default), rota evitando repetir el último patrón usado
     (channels.avatar_last_hook_pattern)."""
+    hooks = _persona(channel)["hooks"]
     style = (channel.get("avatar_hook_style") or "auto_rotate").lower()
-    if style in HOOK_PATTERNS:
+    if style in hooks:
         return style
     last = channel.get("avatar_last_hook_pattern")
-    candidates = [k for k in HOOK_PATTERNS if k != last]
-    return random.choice(candidates or list(HOOK_PATTERNS.keys()))
+    candidates = [k for k in hooks if k != last]
+    return random.choice(candidates or list(hooks.keys()))
 
 def pick_cutaway_beat(channel):
     """Rota entre los 4 tipos de cutaway evitando repetir el último patrón usado
@@ -351,25 +485,28 @@ def build_avatar_clip_spec(channel, mode="intro", hook_pattern_key=None,
     los metadatos para guardar el clip en el pool una vez generado.
     """
     lang = _lang_key(channel)
+    persona = _persona(channel)
     if mode == "outro":
-        hp_key, hp = "cierre", OUTRO
+        hp_key, hp = "cierre", persona["outro"]
     elif mode == "cutaway":
         hp_key = hook_pattern_key or pick_cutaway_beat(channel)
         hp = CUTAWAYS[hp_key]
     else:
         hp_key = hook_pattern_key or pick_hook_pattern(channel)
-        hp = HOOK_PATTERNS[hp_key]
+        hp = persona["hooks"].get(hp_key) or HOOK_PATTERNS[hp_key]
     wd_key, wd = (wardrobe_key, WARDROBE[wardrobe_key]) if wardrobe_key else pick_wardrobe(channel)
-    voice = (voice_archetype or channel.get("avatar_voice_archetype") or "natural").lower()
+    voice = (voice_archetype or persona["voice"] or channel.get("avatar_voice_archetype") or "natural").lower()
     if voice not in VOICE_ARCHETYPES:
         voice = "natural"
     line = random.choice(hp["lines"][lang])
     scene_hint = (channel.get("avatar_scene_hint") or "").strip()
     setting = wd["setting"] + (f" — {scene_hint}" if scene_hint else "")
-    prompt = REALISM_MODULE.format(
+    prompt = persona["module"].format(
         lighting=wd["light"], outfit=wd["outfit"], setting=setting,
         staging=hp["staging"], voice_note=VOICE_ARCHETYPES[voice],
-        lang_instruction=_lang_instruction(lang), line=line,
+        lang_instruction=(_lang_instruction(lang) if not (persona is PERSONAS["news_anchor"] and lang == "es")
+                          else "Habla en español rioplatense de Buenos Aires (acento argentino, con voseo) diciendo exactamente"),
+        line=line,
     )
     return {
         "mode": mode, "hook_pattern": hp_key, "wardrobe": wd_key,
