@@ -551,7 +551,8 @@ def process_video(v):
             if mode in ("intro", "intro_outro"):
                 try:
                     intro = db.get_ready_avatar_clip(ch["id"], "intro")
-                    outro = db.get_ready_avatar_clip(ch["id"], "outro") if mode == "intro_outro" else None
+                    outro = db.get_ready_avatar_clip(ch["id"], "outro", prefer_wardrobe=(intro or {}).get("wardrobe")) \
+                        if mode == "intro_outro" else None
                     if intro:
                         intro_path = _download(intro["clip_url"], os.path.join(td, "avatar_intro.mp4"))
                         outro_path = _download(outro["clip_url"], os.path.join(td, "avatar_outro.mp4")) \
