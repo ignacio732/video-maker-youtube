@@ -329,8 +329,8 @@ def process_video(v):
                                     visual_learning=visual_learning, research_context=research_context,
                                     recent_hooks=recent_hooks)
             except Exception as e:
-                if isinstance(e, llm.LLMQuotaExhausted):
-                    raise  # sin cupo, reintentar sin tendencias fallaría igual
+                if isinstance(e, (llm.LLMQuotaExhausted, llm.ScriptTooShort)):
+                    raise  # sin cupo / guion corto: reintentar sin tendencias no lo arregla
                 if trend_topics:
                     # Si falló con tendencias (ej. una tendencia sensible que el LLM rechaza,
                     # o cualquier otro problema puntual del prompt), reintentar sin tendencias
@@ -1031,7 +1031,7 @@ def _is_transient(e):
     conviene reintentar más tarde en vez de descartarlo y encolar otro."""
     t = str(e).lower()
     return any(k in t for k in (
-        " 429", "rate limit", "quota", "timeout", "timed out", "temporarily",
+        " 429", "rate limit", "quota", "timeout", "timed out", "temporarily", "guion demasiado corto",
         "connection", "invalid response status", "speech.platform.bing.com",
         "no devolvió audio", " 502", " 503", " 504", "server disconnected"))
 
