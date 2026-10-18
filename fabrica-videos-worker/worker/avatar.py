@@ -392,7 +392,7 @@ NEWS_OUTRO = {
     "staging": "Warm, composed sign-off like the end of a news segment — a small genuine smile, "
                "a slight nod, hands together on the desk or a brief open-hand gesture.",
     "lines": {"es": ["Esto fue todo por hoy. Seguinos para no perderte el próximo resumen.",
-                     "Si te sirvió, compartilo con alguien que lo necesite. Nos vemos mañana.",
+                     "Esto fue todo por hoy. Nos vemos en el próximo resumen.",
                      "Contanos en los comentarios qué vas a hacer con tus ahorros. Hasta la próxima.",
                      "Te dejo esto para pensar. Seguinos y mañana te cuento cómo sigue."],
               "en": ["That's all for today. Follow so you don't miss the next update."],
@@ -508,7 +508,13 @@ def build_avatar_clip_spec(channel, mode="intro", hook_pattern_key=None,
                           else "Habla en español rioplatense de Buenos Aires (acento argentino, con voseo) diciendo exactamente"),
         line=line,
     )
+    # Duración sugerida según el largo de la línea: un clip MÁS largo que lo que dura la
+    # frase hace que el modelo la repita o balbucee para llenar (pasó en oct-2026 con
+    # clips de 8s y frases de ~10 palabras). ~2.6 palabras/seg + aire al principio/final.
+    n_words = len(line.split())
+    duration = max(4, min(8, round(n_words / 2.6 + 1.6)))
     return {
+        "duration": duration,
         "mode": mode, "hook_pattern": hp_key, "wardrobe": wd_key,
         "voice_archetype": voice, "language": lang, "line": line, "prompt": prompt,
     }
