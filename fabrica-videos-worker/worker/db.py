@@ -420,7 +420,7 @@ def channels_needing_avatar_clips(min_pool=6):
             out.append({**ch, "_avatar_pool_needs": needs})
     return out
 
-def get_ready_avatar_clip(cid, mode="intro"):
+def get_ready_avatar_clip(cid, mode="intro", prefer_wardrobe=None):
     """Devuelve un clip listo del pool de este canal para el modo pedido, rotando:
     evita repetir el mismo patrón de hook o el mismo vestuario que la última vez
     (channels.avatar_last_hook_pattern / avatar_last_wardrobe) y, entre los que
@@ -433,6 +433,14 @@ def get_ready_avatar_clip(cid, mode="intro"):
                                  "select": "*", "order": "times_used.asc", "limit": "20"})
     if not rows:
         return None
+    if prefer_wardrobe:
+        # Cierre del MISMO video que la intro: misma ropa/set (una conductora no se cambia
+        # de saco entre el arranque y el final de un short de 30 segundos).
+        same = [r for r in rows if r.get("wardrobe") == prefer_wardrobe]
+        if same:
+            min_used = min(r.get("times_used") or 0 for r in same)
+            import random
+            return random.choice([r for r in same if (r.get("times_used") or 0) == min_used])
     last_hook = ch.get("avatar_last_hook_pattern")
     last_wardrobe = ch.get("avatar_last_wardrobe")
     fresh = [r for r in rows if r.get("hook_pattern") != last_hook and r.get("wardrobe") != last_wardrobe]
