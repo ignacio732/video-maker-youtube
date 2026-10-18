@@ -507,6 +507,36 @@ def alt_hook(data, channel):
     alt = (_extract_json(raw).get("hook") or "").strip()
     return alt if alt and alt.lower() != original.strip().lower() else None
 
+# Largo mínimo del guion (palabras narradas). Algunos modelos de respaldo devuelven 1-2
+# frases y salían shorts de 5 segundos (oct-2026). Short objetivo: 18-28 s ≈ 50-75 palabras.
+MIN_WORDS = {"short": 40, "long": 300}
+
+class ScriptTooShort(RuntimeError):
+    """El LLM devolvió un guion muy corto incluso después de reintentar. Transitorio:
+    el video vuelve a la cola (probablemente lo escribió un modelo de respaldo chico)."""
+
+def _call_script(messages, vtype):
+    """_call + validación de largo: si el guion queda corto, pide de nuevo con una
+    instrucción explícita (una vez); si sigue corto, ScriptTooShort."""
+    need = MIN_WORDS.get(vtype, 40)
+    raw = _call(messages)
+    data = _extract_json(raw)
+    words = sum(len((sg.get("text") or "").split()) for sg in data.get("segments") or [])
+    if words >= need:
+        return raw
+    retry = messages + [{"role": "assistant", "content": raw},
+                        {"role": "user", "content":
+                         f"El guion quedó MUY corto ({words} palabras narradas). Reescribilo completo "
+                         f"con AL MENOS {need + 15} palabras narradas repartidas en los segmentos pedidos "
+                         f"(cada 'text' una frase completa). Mismo JSON, misma forma exacta."}]
+    raw2 = _call(retry)
+    data2 = _extract_json(raw2)
+    words2 = sum(len((sg.get("text") or "").split()) for sg in data2.get("segments") or [])
+    if words2 >= need:
+        return raw2
+    raise ScriptTooShort(f"guion demasiado corto ({max(words, words2)} palabras, mínimo {need}); "
+                         "se reintenta más tarde")
+
 def remix_script(channel, vtype, original_title, original_views, original_segments):
     """
     'Remix' de un video viral de referencia: mismo tema y mismo ritmo/timing de hook
@@ -568,7 +598,7 @@ Devolvé SOLO un JSON con esta forma EXACTA:
 {seg_hint}
 Keywords SIEMPRE en inglés, concretas y filmables (nada abstracto)."""
     messages = [{"role": "system", "content": SYSTEM}, {"role": "user", "content": prompt}]
-    raw = _call(messages)
+    raw = _call_script(messages, vtype)
     data = _extract_json(raw)
     data.setdefault("tags", [])
     data.setdefault("hashtags", [])
@@ -595,7 +625,7 @@ def generate(channel, vtype="short", seed_title=None, trends=None, recent_titles
                 {"role": "user", "content": _prompt(channel, vtype, seed_title, trends, recent_titles,
                                                     top_performers, visual_learning, research_context,
                                                     recent_hooks)}]
-    raw = _call(messages)
+    raw = _call_script(messages, vtype)
     data = _extract_json(raw)
     data.setdefault("tags", [])
     data.setdefault("hashtags", [])
