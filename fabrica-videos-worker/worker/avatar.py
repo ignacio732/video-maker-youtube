@@ -441,6 +441,27 @@ def _lang_instruction(lang):
             "en": "Speaking in English, saying exactly",
             "pt": "Falando em português, dizendo exatamente"}[lang]
 
+ACCENT_INSTRUCTIONS = {
+    "rioplatense": "Habla en español rioplatense de Buenos Aires (acento argentino, con voseo) diciendo exactamente",
+    "neutro": "Habla en español latinoamericano neutro (sin acento regional marcado) diciendo exactamente",
+    "mexicano": "Habla en español con acento mexicano natural diciendo exactamente",
+    "espana": "Habla en español de España (acento peninsular) diciendo exactamente",
+}
+ACCENT_CHOICES = [("", "Según la persona"), ("rioplatense", "Rioplatense"), ("neutro", "Neutro"),
+                  ("mexicano", "Mexicano"), ("espana", "España")]
+
+def _accent_instruction(channel, lang, persona):
+    """Acento del avatar al hablar (solo español): el del avatar si está definido; si no,
+    rioplatense para la conductora de noticiero; si no, la instrucción genérica."""
+    if lang != "es":
+        return _lang_instruction(lang)
+    acc = (channel.get("avatar_accent") or "").lower()
+    if acc in ACCENT_INSTRUCTIONS:
+        return ACCENT_INSTRUCTIONS[acc]
+    if persona is PERSONAS["news_anchor"]:
+        return ACCENT_INSTRUCTIONS["rioplatense"]
+    return _lang_instruction(lang)
+
 def _wardrobe_pool_for(channel):
     style = (channel.get("avatar_wardrobe_style") or "mixed").lower()
     fam = _persona(channel)["wardrobe_family"]
@@ -511,8 +532,7 @@ def build_avatar_clip_spec(channel, mode="intro", hook_pattern_key=None,
     prompt = persona["module"].format(
         lighting=wd["light"], outfit=outfit, setting=setting,
         staging=hp["staging"], voice_note=VOICE_ARCHETYPES[voice],
-        lang_instruction=(_lang_instruction(lang) if not (persona is PERSONAS["news_anchor"] and lang == "es")
-                          else "Habla en español rioplatense de Buenos Aires (acento argentino, con voseo) diciendo exactamente"),
+        lang_instruction=_accent_instruction(channel, lang, persona),
         line=line,
     )
     # Duración sugerida según el largo de la línea: un clip MÁS largo que lo que dura la
@@ -545,5 +565,6 @@ def channel_for_avatar(channel, avatar):
         "avatar_last_hook_pattern": avatar.get("last_hook_pattern"),
         "avatar_last_wardrobe": avatar.get("last_wardrobe"),
         "avatar_gender": avatar.get("gender"),
+        "avatar_accent": avatar.get("accent"),
     })
     return merged
