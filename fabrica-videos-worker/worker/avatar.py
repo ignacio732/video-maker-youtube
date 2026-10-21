@@ -503,7 +503,7 @@ def pick_cutaway_beat(channel):
     return random.choice(candidates or list(CUTAWAYS.keys()))
 
 def build_avatar_clip_spec(channel, mode="intro", hook_pattern_key=None,
-                           wardrobe_key=None, voice_archetype=None):
+                           wardrobe_key=None, voice_archetype=None, line=None):
     """Arma la especificación completa de un clip de avatar para este canal:
     qué patrón de hook (o de cierre, si mode='outro'), qué vestuario/escena,
     qué arquetipo de voz y qué línea va a decir — con rotación automática salvo
@@ -525,7 +525,9 @@ def build_avatar_clip_spec(channel, mode="intro", hook_pattern_key=None,
     voice = (voice_archetype or persona["voice"] or channel.get("avatar_voice_archetype") or "natural").lower()
     if voice not in VOICE_ARCHETYPES:
         voice = "natural"
-    line = random.choice(hp["lines"][lang])
+    # `line` permite pasar una frase NUEVA escrita para esta reposición (ver hook_brief);
+    # si no se pasa, se usa una de las frases de ejemplo del patrón.
+    line = (line or "").strip() or random.choice(hp["lines"][lang])
     scene_hint = (channel.get("avatar_scene_hint") or "").strip()
     setting = wd["setting"] + (f" — {scene_hint}" if scene_hint else "")
     outfit = wd.get("outfit_m") if (channel.get("avatar_gender") == "male" and wd.get("outfit_m")) else wd["outfit"]
@@ -568,3 +570,23 @@ def channel_for_avatar(channel, avatar):
         "avatar_accent": avatar.get("accent"),
     })
     return merged
+
+
+def hook_brief(channel, mode="intro", hook_pattern_key=None):
+    """Guía para ESCRIBIR una frase nueva de un patrón (la usa la tarea diaria de
+    reposición para que los ganchos no se repitan): devuelve el nombre del patrón, la
+    intención/puesta en escena y las frases de ejemplo (solo como referencia de tono,
+    no para copiarlas)."""
+    lang = _lang_key(channel)
+    persona = _persona(channel)
+    if mode == "outro":
+        hp = persona["outro"]
+    elif mode == "cutaway":
+        hp = CUTAWAYS[hook_pattern_key]
+    else:
+        hp = persona["hooks"].get(hook_pattern_key) or HOOK_PATTERNS[hook_pattern_key]
+    return {"label": hp["label"], "staging": hp["staging"], "examples": hp["lines"][lang],
+            "rules": ("Una sola frase (o dos muy cortas), 6 a 14 palabras, que funcione con CUALQUIER "
+                      "video del canal (sin cifras, fechas ni nombres concretos), en el registro de la "
+                      "persona, distinta de las frases que este avatar ya dijo. Si el acento es "
+                      "rioplatense, con voseo (tenés, mirá, escuchá) — nunca tuteo.")}
