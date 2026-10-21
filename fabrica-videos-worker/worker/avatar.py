@@ -299,22 +299,28 @@ WARDROBE = {
 }
 WARDROBE.update({
     "na_navy_blazer_desk": {"outfit": "a tailored navy blazer over a white silk blouse, small gold stud earrings",
-                            "setting": "seated at a modern news desk, a large screen behind her showing abstract green and red market chart lines, Buenos Aires skyline softly out of focus",
+                            "outfit_m": "a tailored navy suit jacket over a crisp white shirt, no tie",
+                            "setting": "seated at a modern news desk, a large screen behind showing abstract green and red market chart lines, Buenos Aires skyline softly out of focus",
                             "light": "soft frontal studio key light with warm practical lights in the background"},
     "na_camel_blazer_standing": {"outfit": "a camel blazer over a black fitted top, thin gold necklace",
+                                 "outfit_m": "a camel blazer over a black crew-neck t-shirt",
                                  "setting": "standing beside a tall video wall with abstract currency and market graphics, modern studio set softly out of focus",
                                  "light": "even soft studio light, neutral white balance"},
     "na_white_shirt_stream": {"outfit": "a crisp white button-up shirt, sleeves slightly rolled, a smartwatch",
+                              "outfit_m": "a light blue button-up shirt, sleeves slightly rolled, a smartwatch",
                               "setting": "a semi-formal streaming studio desk with a broadcast microphone on an arm, a laptop and a mug, warm shelves and plants softly out of focus",
                               "light": "warm soft studio light, cozy evening streaming ambience"},
     "na_black_blazer_night": {"outfit": "a black blazer over an ivory blouse",
+                              "outfit_m": "a charcoal suit jacket over a black shirt, no tie",
                               "setting": "seated at the news desk at night, large window behind with Buenos Aires city lights and the Obelisco area softly out of focus",
                               "light": "soft frontal key light with cool night ambience from the window"},
     "na_burgundy_knit_stream": {"outfit": "a fitted burgundy knit top with a delicate necklace",
+                                "outfit_m": "a dark green knit polo sweater",
                                 "setting": "a streaming studio set with a broadcast microphone, a monitor showing abstract price lines, neon-free warm lamp in the background",
                                 "light": "soft key light mixed with a warm desk lamp"},
     "na_grey_suit_newsroom": {"outfit": "a light grey suit jacket over a pale blue blouse",
-                              "setting": "standing in a working newsroom, desks and monitors softly out of focus behind her",
+                              "outfit_m": "a light grey suit jacket over a pale blue shirt, no tie",
+                              "setting": "standing in a working newsroom, desks and monitors softly out of focus behind",
                               "light": "clean bright office studio light"},
 })
 
@@ -361,7 +367,7 @@ NEWS_HOOKS = {
     },
     "dato_clave": {
         "label": "Dato clave",
-        "staging": "Points briefly toward the screen behind or beside her, then turns back to the "
+        "staging": "Points briefly toward the screen behind or beside them, then turns back to the "
                    "lens — presenting a key fact like a host introducing a graphic.",
         "lines": {"es": ["Hay un dato de hoy que casi nadie está mirando, y es clave.",
                          "Mirá este dato, porque explica todo lo que está pasando."],
@@ -501,8 +507,9 @@ def build_avatar_clip_spec(channel, mode="intro", hook_pattern_key=None,
     line = random.choice(hp["lines"][lang])
     scene_hint = (channel.get("avatar_scene_hint") or "").strip()
     setting = wd["setting"] + (f" — {scene_hint}" if scene_hint else "")
+    outfit = wd.get("outfit_m") if (channel.get("avatar_gender") == "male" and wd.get("outfit_m")) else wd["outfit"]
     prompt = persona["module"].format(
-        lighting=wd["light"], outfit=wd["outfit"], setting=setting,
+        lighting=wd["light"], outfit=outfit, setting=setting,
         staging=hp["staging"], voice_note=VOICE_ARCHETYPES[voice],
         lang_instruction=(_lang_instruction(lang) if not (persona is PERSONAS["news_anchor"] and lang == "es")
                           else "Habla en español rioplatense de Buenos Aires (acento argentino, con voseo) diciendo exactamente"),
@@ -537,5 +544,6 @@ def channel_for_avatar(channel, avatar):
         "avatar_character_id": avatar.get("character_id"),
         "avatar_last_hook_pattern": avatar.get("last_hook_pattern"),
         "avatar_last_wardrobe": avatar.get("last_wardrobe"),
+        "avatar_gender": avatar.get("gender"),
     })
     return merged
