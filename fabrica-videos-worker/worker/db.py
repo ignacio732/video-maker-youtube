@@ -386,18 +386,18 @@ def add_segment_visuals(vid, segs, visual_list):
 
 # ---- Avatar / UGC: pool de clips pre-generados (Higgsfield) por canal ----
 def add_avatar_clip(cid, clip_url, mode, hook_pattern, wardrobe, voice_archetype,
-                    duration_seconds=None, transcript=None, avatar_id=None):
+                    duration_seconds=None, transcript=None, avatar_id=None, model=None):
     """Guarda en el pool un clip de avatar ya generado y subido a Storage —
     lo llama el job periódico de generación (Higgsfield), no el worker."""
     return _post("avatar_clips", {
         "channel_id": cid, "clip_url": clip_url, "mode": mode,
         "hook_pattern": hook_pattern, "wardrobe": wardrobe,
         "voice_archetype": voice_archetype, "duration_seconds": duration_seconds,
-        "transcript": transcript, "times_used": 0, "avatar_id": avatar_id,
+        "transcript": transcript, "times_used": 0, "avatar_id": avatar_id, "model": model,
     })[0]
 
 def count_avatar_clips(cid, mode=None):
-    params = {"channel_id": f"eq.{cid}", "select": "id"}
+    params = {"channel_id": f"eq.{cid}", "retired_at": "is.null", "select": "id"}
     if mode:
         params["mode"] = f"eq.{mode}"
     return len(_get("avatar_clips", params))
@@ -429,7 +429,7 @@ def get_ready_avatar_clip(cid, mode="intro", prefer_wardrobe=None, avatar=None):
     vacío para ese canal/modo (el llamador debe seguir sin avatar en ese caso,
     nunca bloquear el video por esto)."""
     ch = get_channel(cid) or {}
-    params = {"channel_id": f"eq.{cid}", "mode": f"eq.{mode}",
+    params = {"channel_id": f"eq.{cid}", "mode": f"eq.{mode}", "retired_at": "is.null",
               "select": "*", "order": "times_used.asc", "limit": "30"}
     if avatar:
         params["avatar_id"] = f"eq.{avatar['id']}"
@@ -463,7 +463,7 @@ def get_ready_avatar_clips(cid, mode="cutaway", count=2, avatar=None):
     si no alcanza la diversidad ideal, completa con lo que quede del pool sin
     repetir el mismo clip. [] si el pool está vacío para ese canal/modo."""
     ch = get_channel(cid) or {}
-    params = {"channel_id": f"eq.{cid}", "mode": f"eq.{mode}",
+    params = {"channel_id": f"eq.{cid}", "mode": f"eq.{mode}", "retired_at": "is.null",
               "select": "*", "order": "times_used.asc", "limit": "30"}
     if avatar:
         params["avatar_id"] = f"eq.{avatar['id']}"
@@ -501,7 +501,7 @@ def get_channel_avatars(cid, only_ready_mode=None):
                             "character_id": "not.is.null", "select": "*", "order": "created_at.asc"})
     if only_ready_mode and rows:
         clips = _get("avatar_clips", {"channel_id": f"eq.{cid}", "mode": f"eq.{only_ready_mode}",
-                                      "select": "avatar_id"})
+                                      "retired_at": "is.null", "select": "avatar_id"})
         have = {c.get("avatar_id") for c in clips}
         rows = [r for r in rows if r["id"] in have]
     return rows
@@ -532,11 +532,17 @@ def pick_avatar(ch, avatars):
         return pool[(ids.index(last) + 1) % len(pool)]
     return pool[0]
 
-def mark_avatar_clip_used(clip_id, times_used=0):
+def mark_avatar_clip_used(clip_id, times_used=0, max_uses=None):
+    """Suma un uso al clip. Si llegó al máximo de usos del avatar (avatars.max_uses),
+    lo retira del pool: la tarea diaria de reposición genera uno nuevo con otra frase,
+    así los ganchos se renuevan solos en vez de repetirse para siempre."""
     from datetime import datetime, timezone
-    return _patch("avatar_clips", {"id": f"eq.{clip_id}"},
-                 {"times_used": (times_used or 0) + 1,
-                  "last_used_at": datetime.now(timezone.utc).isoformat()})
+    now = datetime.now(timezone.utc).isoformat()
+    used = (times_used or 0) + 1
+    fields = {"times_used": used, "last_used_at": now}
+    if max_uses and used >= max_uses:
+        fields["retired_at"] = now
+    return _patch("avatar_clips", {"id": f"eq.{clip_id}"}, fields)
 
 def get_visual_learnings(cid, min_sample=3):
     """¿El gancho (segmento 0) con escena humana concreta rinde mejor que uno abstracto/
