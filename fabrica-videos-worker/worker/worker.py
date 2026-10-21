@@ -575,9 +575,9 @@ def process_video(v):
                         db.update_channel(ch["id"], avatar_last_hook_pattern=intro.get("hook_pattern"),
                                           avatar_last_wardrobe=intro.get("wardrobe"))
                         _mark_avatar_used(ch, avatar, intro)
-                        db.mark_avatar_clip_used(intro["id"], intro.get("times_used"))
+                        db.mark_avatar_clip_used(intro["id"], intro.get("times_used"), (avatar or {}).get("max_uses"))
                         if outro:
-                            db.mark_avatar_clip_used(outro["id"], outro.get("times_used"))
+                            db.mark_avatar_clip_used(outro["id"], outro.get("times_used"), (avatar or {}).get("max_uses"))
                         db.log("avatar", f"Avatar '{(avatar or {}).get('name') or 'único'}' agregado ({mode}) — "
                                          f"hook '{intro.get('hook_pattern')}', "
                                          f"vestuario '{intro.get('wardrobe')}'"
@@ -602,7 +602,7 @@ def process_video(v):
                                           avatar_last_wardrobe=cutaways[-1].get("wardrobe"))
                         _mark_avatar_used(ch, avatar, cutaways[-1])
                         for cw in cutaways:
-                            db.mark_avatar_clip_used(cw["id"], cw.get("times_used"))
+                            db.mark_avatar_clip_used(cw["id"], cw.get("times_used"), (avatar or {}).get("max_uses"))
                         patterns = ", ".join(cw.get("hook_pattern") or "?" for cw in cutaways)
                         db.log("avatar", f"{len(cutaways)} cutaway(s) intercalados: {patterns}",
                               vid=vid, cid=ch["id"])
