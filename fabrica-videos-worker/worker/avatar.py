@@ -518,3 +518,24 @@ def build_avatar_clip_spec(channel, mode="intro", hook_pattern_key=None,
         "mode": mode, "hook_pattern": hp_key, "wardrobe": wd_key,
         "voice_archetype": voice, "language": lang, "line": line, "prompt": prompt,
     }
+
+
+def channel_for_avatar(channel, avatar):
+    """Combina el canal con la config de UNO de sus avatares (tabla ytfactory.avatars) en
+    el formato que espera build_avatar_clip_spec (campos avatar_* del canal). Así cada
+    avatar del canal tiene su propia persona, vestuario, voz, hooks y pista de escena,
+    y su propia memoria de último hook/vestuario para la rotación."""
+    merged = dict(channel or {})
+    if not avatar:
+        return merged
+    merged.update({
+        "avatar_persona": avatar.get("persona") or "ugc",
+        "avatar_wardrobe_style": avatar.get("wardrobe_style") or "mixed",
+        "avatar_voice_archetype": avatar.get("voice_archetype") or "natural",
+        "avatar_hook_style": avatar.get("hook_style") or "auto_rotate",
+        "avatar_scene_hint": avatar.get("scene_hint"),
+        "avatar_character_id": avatar.get("character_id"),
+        "avatar_last_hook_pattern": avatar.get("last_hook_pattern"),
+        "avatar_last_wardrobe": avatar.get("last_wardrobe"),
+    })
+    return merged
