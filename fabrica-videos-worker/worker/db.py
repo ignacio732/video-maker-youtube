@@ -386,14 +386,14 @@ def add_segment_visuals(vid, segs, visual_list):
 
 # ---- Avatar / UGC: pool de clips pre-generados (Higgsfield) por canal ----
 def add_avatar_clip(cid, clip_url, mode, hook_pattern, wardrobe, voice_archetype,
-                    duration_seconds=None, transcript=None):
+                    duration_seconds=None, transcript=None, avatar_id=None):
     """Guarda en el pool un clip de avatar ya generado y subido a Storage —
     lo llama el job periódico de generación (Higgsfield), no el worker."""
     return _post("avatar_clips", {
         "channel_id": cid, "clip_url": clip_url, "mode": mode,
         "hook_pattern": hook_pattern, "wardrobe": wardrobe,
         "voice_archetype": voice_archetype, "duration_seconds": duration_seconds,
-        "transcript": transcript, "times_used": 0,
+        "transcript": transcript, "times_used": 0, "avatar_id": avatar_id,
     })[0]
 
 def count_avatar_clips(cid, mode=None):
@@ -420,7 +420,7 @@ def channels_needing_avatar_clips(min_pool=6):
             out.append({**ch, "_avatar_pool_needs": needs})
     return out
 
-def get_ready_avatar_clip(cid, mode="intro", prefer_wardrobe=None):
+def get_ready_avatar_clip(cid, mode="intro", prefer_wardrobe=None, avatar=None):
     """Devuelve un clip listo del pool de este canal para el modo pedido, rotando:
     evita repetir el mismo patrón de hook o el mismo vestuario que la última vez
     (channels.avatar_last_hook_pattern / avatar_last_wardrobe) y, entre los que
@@ -429,8 +429,13 @@ def get_ready_avatar_clip(cid, mode="intro", prefer_wardrobe=None):
     vacío para ese canal/modo (el llamador debe seguir sin avatar en ese caso,
     nunca bloquear el video por esto)."""
     ch = get_channel(cid) or {}
-    rows = _get("avatar_clips", {"channel_id": f"eq.{cid}", "mode": f"eq.{mode}",
-                                 "select": "*", "order": "times_used.asc", "limit": "20"})
+    params = {"channel_id": f"eq.{cid}", "mode": f"eq.{mode}",
+              "select": "*", "order": "times_used.asc", "limit": "30"}
+    if avatar:
+        params["avatar_id"] = f"eq.{avatar['id']}"
+        ch = {"avatar_last_hook_pattern": avatar.get("last_hook_pattern"),
+              "avatar_last_wardrobe": avatar.get("last_wardrobe")}
+    rows = _get("avatar_clips", params)
     if not rows:
         return None
     if prefer_wardrobe:
@@ -450,7 +455,7 @@ def get_ready_avatar_clip(cid, mode="intro", prefer_wardrobe=None):
     import random
     return random.choice(least_used)
 
-def get_ready_avatar_clips(cid, mode="cutaway", count=2):
+def get_ready_avatar_clips(cid, mode="cutaway", count=2, avatar=None):
     """Como get_ready_avatar_clip pero devuelve varios SIN repetirse entre sí
     (para cutaways: un mismo video puede llevar 2+ clips intercalados, y no
     tendría sentido que sean el mismo). Prioriza los menos usados y evita el
@@ -458,8 +463,13 @@ def get_ready_avatar_clips(cid, mode="cutaway", count=2):
     si no alcanza la diversidad ideal, completa con lo que quede del pool sin
     repetir el mismo clip. [] si el pool está vacío para ese canal/modo."""
     ch = get_channel(cid) or {}
-    rows = _get("avatar_clips", {"channel_id": f"eq.{cid}", "mode": f"eq.{mode}",
-                                 "select": "*", "order": "times_used.asc", "limit": "30"})
+    params = {"channel_id": f"eq.{cid}", "mode": f"eq.{mode}",
+              "select": "*", "order": "times_used.asc", "limit": "30"}
+    if avatar:
+        params["avatar_id"] = f"eq.{avatar['id']}"
+        ch = {"avatar_last_hook_pattern": avatar.get("last_hook_pattern"),
+              "avatar_last_wardrobe": avatar.get("last_wardrobe")}
+    rows = _get("avatar_clips", params)
     if not rows:
         return []
     last_hook = ch.get("avatar_last_hook_pattern")
@@ -482,6 +492,45 @@ def get_ready_avatar_clips(cid, mode="cutaway", count=2):
                 chosen.append(r); used_ids.add(r["id"])
     random.shuffle(chosen)
     return chosen
+
+# ---- Avatares múltiples por canal (tabla ytfactory.avatars) ----
+def get_channel_avatars(cid, only_ready_mode=None):
+    """Avatares activos del canal con personaje cargado. Si only_ready_mode, solo los que
+    ya tienen al menos 1 clip de ese modo en el pool (para no elegir uno sin clips)."""
+    rows = _get("avatars", {"channel_id": f"eq.{cid}", "active": "eq.true",
+                            "character_id": "not.is.null", "select": "*", "order": "created_at.asc"})
+    if only_ready_mode and rows:
+        clips = _get("avatar_clips", {"channel_id": f"eq.{cid}", "mode": f"eq.{only_ready_mode}",
+                                      "select": "avatar_id"})
+        have = {c.get("avatar_id") for c in clips}
+        rows = [r for r in rows if r["id"] in have]
+    return rows
+
+def get_avatar(aid):
+    rows = _get("avatars", {"id": f"eq.{aid}", "select": "*"})
+    return rows[0] if rows else None
+
+def update_avatar(aid, **fields):
+    return _patch("avatars", {"id": f"eq.{aid}"}, fields)
+
+def pick_avatar(ch, avatars):
+    """Elige el avatar del próximo video según channels.avatar_rotation:
+    round_robin = alterna en orden (el siguiente al último usado), random = al azar,
+    weighted = al azar ponderado por avatars.weight. Peso 0 = nunca sale."""
+    import random
+    pool = [a for a in avatars if (a.get("weight") if a.get("weight") is not None else 1) > 0]
+    if not pool:
+        return None
+    mode = (ch.get("avatar_rotation") or "round_robin").lower()
+    if mode == "random":
+        return random.choice(pool)
+    if mode == "weighted":
+        return random.choices(pool, weights=[a.get("weight") or 1 for a in pool], k=1)[0]
+    last = ch.get("avatar_last_avatar_id")
+    ids = [a["id"] for a in pool]
+    if last in ids:
+        return pool[(ids.index(last) + 1) % len(pool)]
+    return pool[0]
 
 def mark_avatar_clip_used(clip_id, times_used=0):
     from datetime import datetime, timezone
