@@ -373,10 +373,17 @@ def process_video(v):
         # 2) VOZ + timings
         db.set_status(vid, "voicing")
         mp3 = os.path.join(td, "voz.mp3")
+        # Avatar de este video (canales con varios avatares): se decide ANTES de la voz para
+        # que la narración pueda usar la voz que corresponde a ese avatar (ej. si sale el
+        # conductor, voz masculina; si sale la conductora, femenina).
+        avatar = _choose_avatar(v, ch, vtype)
         # Voz y ritmo: lo elegido para ESTE video (dashboard → Nuevo video) tiene prioridad;
-        # si no, lo del canal; si no, el default por idioma / TTS_RATE.
+        # después la voz del avatar elegido (si el canal pide coherencia); después la del
+        # canal; si no, el default por idioma / TTS_RATE.
         channel_voice = ch.get("voice") or _default_voice(ch)
-        voice = (v.get("voice") or "").strip() or channel_voice
+        avatar_voice = ((avatar or {}).get("narration_voice") or "").strip() \
+            if ch.get("avatar_match_voice", True) else ""
+        voice = (v.get("voice") or "").strip() or avatar_voice or channel_voice
         rate = (v.get("voice_rate") or "").strip() or (ch.get("voice_rate") or "").strip() or None
         words, used_voice = render.synth_voice(data["full_text"], voice, mp3, rate=rate,
                                                fallback_voice=channel_voice,
@@ -546,12 +553,14 @@ def process_video(v):
         # intercalados a mitad de video (cutaways). Nunca bloquea el video: si el
         # pool está vacío (o falla), sale igual sin avatar. 'full' no pasa por acá
         # (se genera aparte, manual, no usa pool).
-        if ch.get("avatar_enabled") and ch.get("avatar_character_id") and vtype == "short":
+        legacy_avatar = ch.get("avatar_character_id") and not db.get_channel_avatars(ch["id"])
+        if ch.get("avatar_enabled") and vtype == "short" and (avatar or legacy_avatar):
             mode = (ch.get("avatar_mode") or "intro").lower()
             if mode in ("intro", "intro_outro"):
                 try:
-                    intro = db.get_ready_avatar_clip(ch["id"], "intro")
-                    outro = db.get_ready_avatar_clip(ch["id"], "outro", prefer_wardrobe=(intro or {}).get("wardrobe")) \
+                    intro = db.get_ready_avatar_clip(ch["id"], "intro", avatar=avatar)
+                    outro = db.get_ready_avatar_clip(ch["id"], "outro", prefer_wardrobe=(intro or {}).get("wardrobe"),
+                                                     avatar=avatar) \
                         if mode == "intro_outro" else None
                     if intro:
                         intro_path = _download(intro["clip_url"], os.path.join(td, "avatar_intro.mp4"))
@@ -565,10 +574,12 @@ def process_video(v):
                                         avatar_clip_urls=clip_urls)
                         db.update_channel(ch["id"], avatar_last_hook_pattern=intro.get("hook_pattern"),
                                           avatar_last_wardrobe=intro.get("wardrobe"))
+                        _mark_avatar_used(ch, avatar, intro)
                         db.mark_avatar_clip_used(intro["id"], intro.get("times_used"))
                         if outro:
                             db.mark_avatar_clip_used(outro["id"], outro.get("times_used"))
-                        db.log("avatar", f"Avatar agregado ({mode}) — hook '{intro.get('hook_pattern')}', "
+                        db.log("avatar", f"Avatar '{(avatar or {}).get('name') or 'único'}' agregado ({mode}) — "
+                                         f"hook '{intro.get('hook_pattern')}', "
                                          f"vestuario '{intro.get('wardrobe')}'"
                                          + (" + cierre" if outro else ""), vid=vid, cid=ch["id"])
                     else:
@@ -578,7 +589,7 @@ def process_video(v):
                     db.log("avatar", f"No se pudo agregar el clip de avatar: {e}", "warn", vid, ch["id"])
             elif mode == "cutaways":
                 try:
-                    cutaways = db.get_ready_avatar_clips(ch["id"], "cutaway", count=2)
+                    cutaways = db.get_ready_avatar_clips(ch["id"], "cutaway", count=2, avatar=avatar)
                     if cutaways:
                         paths = [_download(cw["clip_url"], os.path.join(td, f"cutaway_{i}.mp4"))
                                 for i, cw in enumerate(cutaways)]
@@ -589,6 +600,7 @@ def process_video(v):
                                         avatar_clip_urls=[cw["clip_url"] for cw in cutaways])
                         db.update_channel(ch["id"], avatar_last_hook_pattern=cutaways[-1].get("hook_pattern"),
                                           avatar_last_wardrobe=cutaways[-1].get("wardrobe"))
+                        _mark_avatar_used(ch, avatar, cutaways[-1])
                         for cw in cutaways:
                             db.mark_avatar_clip_used(cw["id"], cw.get("times_used"))
                         patterns = ", ".join(cw.get("hook_pattern") or "?" for cw in cutaways)
@@ -655,6 +667,52 @@ def process_video(v):
         db.update_video(vid, status="ready", error=None)  # limpia avisos de reintentos previos
         if not ch.get("autonomous"):
             publish_video(vid, ch, data, video_url, thumb_url, vtype=vtype)
+
+def _choose_avatar(v, ch, vtype):
+    """Decide qué avatar lleva este video (o ninguno). Respeta, en orden:
+    'sin avatar' marcado en el video → avatar elegido a mano en Nuevo video →
+    % de videos con avatar del canal (avatar_frequency) → rotación del canal.
+    Solo considera avatares que ya tienen clips en el pool para el modo del canal.
+    Devuelve el dict del avatar o None. Nunca falla el video por esto."""
+    try:
+        if not ch.get("avatar_enabled") or vtype != "short" or v.get("no_avatar"):
+            return None
+        mode = (ch.get("avatar_mode") or "intro").lower()
+        if mode == "full":
+            return None
+        need = "cutaway" if mode == "cutaways" else "intro"
+        avatars = db.get_channel_avatars(ch["id"], only_ready_mode=need)
+        if not avatars:
+            return None
+        if v.get("avatar_id"):
+            chosen = next((a for a in avatars if a["id"] == v["avatar_id"]), None)
+            if chosen:
+                return chosen
+            db.log("avatar", "El avatar elegido para este video no tiene clips listos; se usa la rotación",
+                   "warn", v["id"], ch["id"])
+        freq = ch.get("avatar_frequency")
+        if freq is not None and freq < 100 and random.randint(1, 100) > freq:
+            db.log("avatar", f"Este video sale sin avatar (el canal usa avatar en el {freq}% de los shorts)",
+                   vid=v["id"], cid=ch["id"])
+            return None
+        chosen = db.pick_avatar(ch, avatars)
+        if chosen:
+            db.update_video(v["id"], avatar_id=chosen["id"])
+        return chosen
+    except Exception as e:
+        db.log("avatar", f"No se pudo elegir avatar: {e}", "warn", v.get("id"), ch.get("id"))
+        return None
+
+def _mark_avatar_used(ch, avatar, clip):
+    if not avatar:
+        return
+    try:
+        db.update_avatar(avatar["id"], last_hook_pattern=clip.get("hook_pattern"),
+                         last_wardrobe=clip.get("wardrobe"),
+                         last_used_at=datetime.now(timezone.utc).isoformat())
+        db.update_channel(ch["id"], avatar_last_avatar_id=avatar["id"])
+    except Exception:
+        pass
 
 def _channel_accounts(ch):
     """Lista de cuentas destino del canal: [{platform, accountId}]. Compat con el campo viejo."""
