@@ -1,5 +1,5 @@
 """Cliente Supabase (REST) para el esquema ytfactory. Usa service_role en el worker."""
-import os, requests
+import os, re, requests
 from datetime import datetime
 
 URL = os.environ["SUPABASE_URL"].rstrip("/")
@@ -420,7 +420,18 @@ def channels_needing_avatar_clips(min_pool=6):
             out.append({**ch, "_avatar_pool_needs": needs})
     return out
 
-def get_ready_avatar_clip(cid, mode="intro", prefer_wardrobe=None, avatar=None):
+_TOPIC_STOP = set("""el la los las un una unos unas de del al a en y o que con por para como mas más
+muy sin sobre este esta esto estos estas ese esa eso es son ser no si sí se su sus tu tus te lo le
+les me mi nos vos ya pero porque cuando donde qué cómo cuál todo toda todos nunca siempre hay
+algo nadie cada así mirá esperá pará ojo truco""".split())
+
+def _topic_words(text):
+    import unicodedata
+    t = unicodedata.normalize("NFD", (text or "").lower())
+    t = "".join(c for c in t if unicodedata.category(c) != "Mn")
+    return {w for w in re.findall(r"[a-z]{4,}", t) if w not in _TOPIC_STOP}
+
+def get_ready_avatar_clip(cid, mode="intro", prefer_wardrobe=None, avatar=None, topic=None):
     """Devuelve un clip listo del pool de este canal para el modo pedido, rotando:
     evita repetir el mismo patrón de hook o el mismo vestuario que la última vez
     (channels.avatar_last_hook_pattern / avatar_last_wardrobe) y, entre los que
@@ -446,6 +457,24 @@ def get_ready_avatar_clip(cid, mode="intro", prefer_wardrobe=None, avatar=None):
             min_used = min(r.get("times_used") or 0 for r in same)
             import random
             return random.choice([r for r in same if (r.get("times_used") or 0) == min_used])
+    if topic:
+        # Si alguna frase del pool comparte palabras con el tema del video (p. ej. "whisky",
+        # "aceite"), se prefiere esa: el gancho queda pegado al contenido. Si ninguna
+        # comparte, sigue la rotación normal.
+        # Palabras que aparecen en muchas frases del pool (p. ej. "vino" en un canal de
+        # vinos) no distinguen nada: se ignoran para no anular la rotación.
+        from collections import Counter
+        bags = [_topic_words(r.get("transcript")) for r in rows]
+        df = Counter(w for b in bags for w in b)
+        common = {w for w, n in df.items() if len(rows) >= 3 and n > len(rows) / 4}
+        tw = _topic_words(topic) - common
+        scored = [(len(tw & b), r) for b, r in zip(bags, rows)]
+        best = max(sc for sc, _ in scored)
+        if best > 0:
+            top = [r for sc, r in scored if sc == best]
+            min_used = min(r.get("times_used") or 0 for r in top)
+            import random
+            return random.choice([r for r in top if (r.get("times_used") or 0) == min_used])
     last_hook = ch.get("avatar_last_hook_pattern")
     last_wardrobe = ch.get("avatar_last_wardrobe")
     fresh = [r for r in rows if r.get("hook_pattern") != last_hook and r.get("wardrobe") != last_wardrobe]
