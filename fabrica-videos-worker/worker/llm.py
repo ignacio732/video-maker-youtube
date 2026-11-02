@@ -527,7 +527,11 @@ _TUTEO_RE = re.compile(
     r"abre|ábrelo|sirve|toma|tómalo|busca|evita|compra|cómpralo|aprovecha|intenta|revisa|"
     r"rocíalo|rocíala|déjalo|déjala|ponlo|ponla|llévalo|pídelo|pide|disfruta|guarda|"
     r"enfría|enfríalo|decanta|decántalo|olvida|imagina|fíjate|anímate|atrévete|"
-    r"vuelves|usas|tomas|buscas|abres|sirves|guardas|crees)\b",
+    r"vuelves|usas|tomas|buscas|abres|sirves|guardas|crees|"
+    r"traslada|trasládalo|cambia|cámbialo|deja|llena|vierte|viértelo|calienta|corta|mezcla|agita|"
+    r"huele|saborea|lee|pregunta|cuenta|llama|escribe|visita|empieza|lleva|trae|combina|"
+    r"marida|oxigena|descorcha|tapa|cierra|ciérrala|ciérralo|elimina|reemplaza|acompaña|apunta|"
+    r"anota|aprende|conoce|confía|sabías|tenías|querías|podrías)\b",
     re.IGNORECASE)
 
 def _is_rioplatense(channel):
@@ -557,6 +561,9 @@ def _enforce_voseo(channel, data):
               f"tuteo ({', '.join(hits)}). Pasalo TODO a voseo rioplatense (elegí, probá, mirá, "
               "tenés, podés, sabés, sos, seguinos, contame...), sin cambiar el sentido, el largo "
               "ni el orden de las frases. Lo que está en tercera persona queda igual. "
+              "Las órdenes NEGATIVAS van en subjuntivo como siempre en Argentina: 'no elijas', "
+              "'nunca guardes', 'no compres' (NUNCA 'no elegí' ni 'nunca guardá'). "
+              "Nada de vosotros (creéis, queréis). "
               "Devolvé SOLO un JSON con la misma forma exacta (mismas claves y misma cantidad "
               "de elementos en 'segments'):\n" + json.dumps(src, ensure_ascii=False))
     try:
