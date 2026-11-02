@@ -45,7 +45,10 @@ def _language_note(channel):
     if not lang.startswith("es"):
         return f"Escribí en el idioma '{lang}' (código ISO), de forma neutra y clara."
     if voice.startswith("es-ar") or voice.startswith("es-uy"):
-        return "Escribí en español rioplatense neutro (voseo), sin modismos extremos."
+        return ("Escribí en español rioplatense neutro con VOSEO en TODO el texto (título, gancho, "
+                "descripción y cada segmento), sin modismos extremos. Usá siempre las formas de vos: "
+                "elegí, probá, mirá, guardá, servilo, seguinos, contame, tenés, podés, querés, sabés, sos. "
+                "NUNCA uses tuteo (elige, prueba, mira, sigue, cuéntame, tienes, puedes, sabes, eres).")
     if voice.startswith("es-mx"):
         return "Escribí en español latinoamericano neutro con base mexicana (tuteo), sin modismos locales."
     if voice.startswith("es-es"):
@@ -511,6 +514,63 @@ def alt_hook(data, channel):
 # frases y salían shorts de 5 segundos (oct-2026). Short objetivo: 18-28 s ≈ 50-75 palabras.
 MIN_WORDS = {"short": 40, "long": 300}
 
+# ---- Guardia de voseo ----
+# Los modelos (sobre todo los de respaldo) a veces ignoran la nota de voseo y mezclan
+# tuteo ("elige", "prefiere", "tienes") en un canal rioplatense (nov-2026, WineinColors).
+# Se detectan formas inequívocas de tú y se pide UNA reescritura a voseo.
+_TUTEO_RE = re.compile(
+    r"\b(tienes|puedes|quieres|sabes|eres|necesitas|debes|prefieres|conoces|piensas|"
+    r"elige|elígelo|elígela|prefiere|escucha|escúchame|mira|míralo|recuerda|descubre|comparte|"
+    r"comenta|piensa|prueba|pruébalo|pruébala|guárdalo|guárdala|sírvelo|sírvela|"
+    r"suscríbete|síguenos|sígueme|cuéntame|cuéntanos|déjame|dime|dinos|haz|ven|pon|ten)\b",
+    re.IGNORECASE)
+
+def _is_rioplatense(channel):
+    lang = (channel.get("language") or "es").lower()
+    voice = (channel.get("voice") or "").lower()
+    return lang.startswith("es") and (voice.startswith("es-ar") or voice.startswith("es-uy"))
+
+def _tuteo_hits(data):
+    parts = [data.get("title") or "", data.get("hook") or "", data.get("description") or ""]
+    parts += [sg.get("text") or "" for sg in data.get("segments") or []]
+    return sorted({m.group(0).lower() for t in parts for m in _TUTEO_RE.finditer(t)})
+
+def _enforce_voseo(channel, data):
+    """Si el canal narra en rioplatense y el guion trae tuteo, lo reescribe a voseo
+    (solo title/hook/description/text; keywords e image_prompt quedan igual).
+    Best-effort: si la reescritura falla o cambia la forma, deja el guion original."""
+    if not _is_rioplatense(channel):
+        return data
+    hits = _tuteo_hits(data)
+    if not hits:
+        return data
+    segs = data.get("segments") or []
+    src = {"title": data.get("title") or "", "hook": data.get("hook") or "",
+           "description": data.get("description") or "",
+           "segments": [sg.get("text") or "" for sg in segs]}
+    prompt = ("Este guion es para un canal argentino narrado en español rioplatense, pero tiene "
+              f"tuteo ({', '.join(hits)}). Pasalo TODO a voseo rioplatense (elegí, probá, mirá, "
+              "tenés, podés, sabés, sos, seguinos, contame...), sin cambiar el sentido, el largo "
+              "ni el orden de las frases. Lo que está en tercera persona queda igual. "
+              "Devolvé SOLO un JSON con la misma forma exacta (mismas claves y misma cantidad "
+              "de elementos en 'segments'):\n" + json.dumps(src, ensure_ascii=False))
+    try:
+        fixed = _extract_json(_call([{"role": "system", "content": SYSTEM},
+                                     {"role": "user", "content": prompt}]))
+        new_segs = fixed.get("segments") or []
+        if len(new_segs) != len(segs) or not all(isinstance(t, str) and t.strip() for t in new_segs):
+            print(f"[voseo] reescritura descartada (forma distinta); tuteo: {hits}")
+            return data
+        for sg, t in zip(segs, new_segs):
+            sg["text"] = t.strip()
+        for k in ("title", "hook", "description"):
+            if isinstance(fixed.get(k), str) and fixed[k].strip():
+                data[k] = fixed[k].strip()
+        print(f"[voseo] tuteo corregido: {hits} -> quedan {_tuteo_hits(data)}")
+    except Exception as e:
+        print(f"[voseo] no se pudo reescribir ({e}); tuteo: {hits}")
+    return data
+
 class ScriptTooShort(RuntimeError):
     """El LLM devolvió un guion muy corto incluso después de reintentar. Transitorio:
     el video vuelve a la cola (probablemente lo escribió un modelo de respaldo chico)."""
@@ -599,7 +659,7 @@ Devolvé SOLO un JSON con esta forma EXACTA:
 Keywords SIEMPRE en inglés, concretas y filmables (nada abstracto)."""
     messages = [{"role": "system", "content": SYSTEM}, {"role": "user", "content": prompt}]
     raw = _call_script(messages, vtype)
-    data = _extract_json(raw)
+    data = _enforce_voseo(channel, _extract_json(raw))
     data.setdefault("tags", [])
     data.setdefault("hashtags", [])
     if brand:
@@ -626,7 +686,7 @@ def generate(channel, vtype="short", seed_title=None, trends=None, recent_titles
                                                     top_performers, visual_learning, research_context,
                                                     recent_hooks)}]
     raw = _call_script(messages, vtype)
-    data = _extract_json(raw)
+    data = _enforce_voseo(channel, _extract_json(raw))
     data.setdefault("tags", [])
     data.setdefault("hashtags", [])
     # Coherencia: asegurar el hashtag de marca del canal en cada video
