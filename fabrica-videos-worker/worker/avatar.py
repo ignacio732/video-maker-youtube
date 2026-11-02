@@ -324,10 +324,35 @@ WARDROBE.update({
                               "light": "clean bright office studio light"},
 })
 
+# Vinoteca / vino: escenas creíbles para un/a sommelier o vinotecario/a que graba sus
+# recomendaciones (etiquetas nunca legibles, sin marcas).
+WARDROBE.update({
+    "wb_vinoteca_apron": {"outfit": "a dark denim shirt with a black sommelier apron",
+                          "setting": "inside a cozy wine shop, in front of wooden shelves full of wine bottles softly out of focus, labels unreadable",
+                          "light": "warm shop lighting mixed with daylight from the storefront"},
+    "wb_cellar_sweater": {"outfit": "a charcoal knit sweater",
+                          "setting": "in a stone-walled wine cellar with oak barrels and racks of bottles softly out of focus",
+                          "light": "warm dim cellar lights"},
+    "wb_tasting_counter": {"outfit": "a crisp white button-up shirt, sleeves slightly rolled",
+                           "setting": "behind a wooden tasting counter with a few wine glasses and an open bottle with no readable label",
+                           "light": "soft warm pendant lights"},
+    "wb_dinner_table": {"outfit": "a casual black top", "outfit_m": "a casual black t-shirt",
+                        "setting": "at a home dining table set with a cheese board, bread and two glasses of red wine",
+                        "light": "warm evening indoor light"},
+    "wb_terrace_evening": {"outfit": "a light linen shirt",
+                           "setting": "on a city apartment terrace at dusk holding a glass of red wine, Buenos Aires rooftops softly out of focus",
+                           "light": "golden-hour daylight"},
+    "wb_kitchen_pairing": {"outfit": "a casual olive-green shirt",
+                           "setting": "in a home kitchen while cooking, a wine bottle with no readable label and a glass on the counter next to a cutting board",
+                           "light": "bright natural daylight"},
+})
+
 WARDROBE_FAMILIES = {
     "home_casual": ["hc_sweater_living", "hc_hoodie_balcony", "hc_tshirt_kitchen", "hc_sweater_couch_night"],
     "office_smart": ["os_shirt_desk", "os_blazer_shelf", "os_cardigan_desk_evening"],
     "outdoor_casual": ["oc_jacket_street", "oc_hoodie_car", "oc_sweater_park"],
+    "wine_bar": ["wb_vinoteca_apron", "wb_cellar_sweater", "wb_tasting_counter",
+                 "wb_dinner_table", "wb_terrace_evening", "wb_kitchen_pairing"],
     "news_studio": ["na_navy_blazer_desk", "na_camel_blazer_standing", "na_white_shirt_stream",
                     "na_black_blazer_night", "na_burgundy_knit_stream", "na_grey_suit_newsroom"],
 }
@@ -420,7 +445,8 @@ WARDROBE_STYLE_CHOICES = [("mixed", "Mezclado — máxima variedad (recomendado)
                           ("home_casual", "Casual en casa"),
                           ("office_smart", "Smart casual / oficina"),
                           ("outdoor_casual", "Casual al aire libre"),
-                          ("news_studio", "Estudio de noticias / streaming")]
+                          ("news_studio", "Estudio de noticias / streaming"),
+                          ("wine_bar", "Vinoteca / vino")]
 VOICE_ARCHETYPE_CHOICES = [("natural", "Natural (recomendado)"),
                            ("hyped", "Hyped / alta energía"),
                            ("calm", "Calma / pausada"),
