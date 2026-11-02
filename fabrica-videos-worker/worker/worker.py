@@ -558,7 +558,8 @@ def process_video(v):
             mode = (ch.get("avatar_mode") or "intro").lower()
             if mode in ("intro", "intro_outro"):
                 try:
-                    intro = db.get_ready_avatar_clip(ch["id"], "intro", avatar=avatar)
+                    intro = db.get_ready_avatar_clip(ch["id"], "intro", avatar=avatar,
+                                                     topic=f"{data.get('title') or ''} {data.get('full_text') or ''}")
                     outro = db.get_ready_avatar_clip(ch["id"], "outro", prefer_wardrobe=(intro or {}).get("wardrobe"),
                                                      avatar=avatar) \
                         if mode == "intro_outro" else None
