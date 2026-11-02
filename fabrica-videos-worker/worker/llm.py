@@ -519,10 +519,15 @@ MIN_WORDS = {"short": 40, "long": 300}
 # tuteo ("elige", "prefiere", "tienes") en un canal rioplatense (nov-2026, WineinColors).
 # Se detectan formas inequívocas de tú y se pide UNA reescritura a voseo.
 _TUTEO_RE = re.compile(
-    r"\b(tienes|puedes|quieres|sabes|eres|necesitas|debes|prefieres|conoces|piensas|"
+    r"(?<!\bse )\b(tienes|puedes|quieres|sabes|eres|necesitas|debes|prefieres|conoces|piensas|"
     r"elige|elígelo|elígela|prefiere|escucha|escúchame|mira|míralo|recuerda|descubre|comparte|"
     r"comenta|piensa|prueba|pruébalo|pruébala|guárdalo|guárdala|sírvelo|sírvela|"
-    r"suscríbete|síguenos|sígueme|cuéntame|cuéntanos|déjame|dime|dinos|haz|ven|pon|ten)\b",
+    r"suscríbete|síguenos|sígueme|cuéntame|cuéntanos|déjame|dime|dinos|haz|ven|pon|ten|"
+    r"vuelve|usa|úsalo|úsala|consume|consúmelo|coloca|colócalo|mantén|mantenlo|agrega|añade|"
+    r"abre|ábrelo|sirve|toma|tómalo|busca|evita|compra|cómpralo|aprovecha|intenta|revisa|"
+    r"rocíalo|rocíala|déjalo|déjala|ponlo|ponla|llévalo|pídelo|pide|disfruta|guarda|"
+    r"enfría|enfríalo|decanta|decántalo|olvida|imagina|fíjate|anímate|atrévete|"
+    r"vuelves|usas|tomas|buscas|abres|sirves|guardas|crees)\b",
     re.IGNORECASE)
 
 def _is_rioplatense(channel):
