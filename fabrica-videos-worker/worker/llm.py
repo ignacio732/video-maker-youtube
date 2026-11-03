@@ -211,6 +211,7 @@ Audiencia: {channel.get('target_audience') or 'general'}
 Formato del video: {vtype} — duración objetivo {dur}.
 
 {_language_note(channel)}
+{_money_note(channel)}
 
 IDENTIDAD DEL CANAL (mantené COHERENCIA con todos sus videos): mismo tono y estilo de voz
 en cada video; el CTA final invita a seguir el canal "{channel['name']}" para más de
@@ -514,6 +515,155 @@ def alt_hook(data, channel):
 # frases y salían shorts de 5 segundos (oct-2026). Short objetivo: 18-28 s ≈ 50-75 palabras.
 MIN_WORDS = {"short": 40, "long": 300}
 
+# ---- Moneda: que las cifras de dinero se digan con la moneda correcta ----
+# Problema real (nov-2026): edge-tts lee "$" como "dólares", así que "$42.000" de una
+# vinoteca argentina sonaba "42.000 dólares", y en Dólar América el blue "a $1.560" sonaba
+# "1.560 dólares". Tres capas: (1) nota en el prompt con la moneda del canal, (2) un
+# chequeo con IA contra la fuente cuando el guion trae cifras de dinero, y (3) un filtro
+# fijo (normalize_money_data) que reemplaza los símbolos por la moneda en palabras antes
+# de la voz. channels.currency = moneda por defecto del "$" (null = automático).
+CURRENCY_NAMES = {
+    "ARS": ("peso", "pesos", "pesos argentinos"), "USD": ("dólar", "dólares", "dólares estadounidenses"),
+    "EUR": ("euro", "euros", "euros"), "MXN": ("peso", "pesos", "pesos mexicanos"),
+    "CLP": ("peso", "pesos", "pesos chilenos"), "COP": ("peso", "pesos", "pesos colombianos"),
+    "UYU": ("peso", "pesos", "pesos uruguayos"), "PEN": ("sol", "soles", "soles peruanos"),
+    "BRL": ("real", "reales", "reales brasileños"), "GBP": ("libra", "libras", "libras esterlinas"),
+}
+
+def channel_currency(channel):
+    cur = (channel.get("currency") or "").strip().upper()
+    return cur if cur in CURRENCY_NAMES else None
+
+def _money_note(channel):
+    lang = (channel.get("language") or "es").lower()
+    cur = channel_currency(channel)
+    if lang.startswith("en"):
+        base = ("MONEY: always say the currency in words after the number in the narrated 'text' "
+                "(\"25 dollars\", \"20 euros\"), never a bare symbol.")
+        return base + (f" Default currency for this channel: {cur}." if cur else "")
+    if not lang.startswith("es"):
+        return ""
+    note = ("MONEDA (obligatorio): en cada 'text' narrado escribí la moneda EN PALABRAS después del "
+            "número (\"42.000 pesos\", \"25 dólares\", \"20 euros\"); NUNCA uses símbolos ($, US$, USD, "
+            "u$s, €) en el texto narrado. En título y descripción podés usar símbolo, pero el correcto: "
+            "\"$\" solo para pesos y \"US$\" para dólares. ")
+    if cur:
+        sg, pl, full = CURRENCY_NAMES[cur]
+        note += (f"La moneda por defecto de este canal es {full} ({cur}): toda cifra que en la fuente "
+                 f"aparezca con \"$\" o sin aclarar es en {pl}, salvo que la fuente diga US$/USD/u$s/euros. ")
+    else:
+        note += "Aclarará siempre de qué moneda es cada cifra según la fuente; si no lo sabés, no des el monto. "
+    if cur == "ARS":
+        note += ("El precio del dólar (blue, oficial, MEP, CCL, tarjeta, cripto) y cualquier tipo de cambio "
+                 "se expresa en PESOS por dólar: \"el blue cerró a 1.560 pesos\", NUNCA \"1.560 dólares\".")
+    return note.replace("Aclarará", "Aclará")
+
+_NUM = r"\d{1,3}(?:[.\s]\d{3})+(?:,\d+)?|\d+(?:[.,]\d+)?"
+_SCALE = r"(?:\s+(mil\s+millones|millones|millón|millon|mil|M|MM|k))?"
+_CUR_WORDS = r"(?:pesos?|d[oó]lar(?:es)?|euros?|reales?|soles?|libras?)"
+
+def _money_phrase(num, scale, cur_code):
+    sg, pl, _ = CURRENCY_NAMES[cur_code]
+    scale = (scale or "").strip()
+    scale_norm = {"M": "millones", "MM": "millones", "k": "mil", "millon": "millón"}.get(scale, scale)
+    if scale_norm in ("millones", "millón", "mil millones"):
+        return f"{num} {scale_norm} de {pl}"
+    if scale_norm == "mil":
+        return f"{num} mil {pl}"
+    return f"{num} {sg if num in ('1', '1,0') else pl}"
+
+def normalize_money(text, currency=None, lang="es"):
+    """Filtro fijo previo a la voz (solo español): cambia símbolos de moneda por la moneda
+    en palabras. '$' usa la moneda del canal (o dólares si el canal es automático, que es
+    lo que ya leía la voz)."""
+    if not text or not (lang or "es").lower().startswith("es"):
+        return text
+    default = currency if currency in CURRENCY_NAMES else "USD"
+    rules = [
+        (r"(?:US\s?\$|U\$S|u\$s|U\$D|USD)\s?(" + _NUM + ")" + _SCALE, "USD"),
+        (r"(" + _NUM + ")" + _SCALE + r"\s?(?:USD|US\$|u\$s|U\$S|U\$D)\b", "USD"),
+        (r"(?:€|EUR)\s?(" + _NUM + ")" + _SCALE, "EUR"),
+        (r"(" + _NUM + ")" + _SCALE + r"\s?(?:€|EUR\b)", "EUR"),
+        (r"(?:AR\$|ARS)\s?(" + _NUM + ")" + _SCALE, "ARS"),
+        (r"(" + _NUM + ")" + _SCALE + r"\s?ARS\b", "ARS"),
+        (r"(?:R\$|BRL)\s?(" + _NUM + ")" + _SCALE, "BRL"),
+        (r"\$\s?(" + _NUM + ")" + _SCALE, default),
+    ]
+    for pat, cur in rules:
+        def _sub(m, cur=cur):
+            after = text_ref[0][m.end():m.end() + 25]
+            # "$42.000 pesos" / "$3 millones de pesos": la moneda ya está dicha → solo sacar el símbolo
+            if re.match(r"\s*(?:de\s+)?" + _CUR_WORDS + r"\b", after, re.I):
+                return m.group(1) + (" " + m.group(2) if m.group(2) else "")
+            return _money_phrase(m.group(1), m.group(2), cur)
+        text_ref = [text]
+        text = re.sub(pat, _sub, text)
+    return re.sub(r"\s{2,}", " ", text)
+
+def normalize_money_data(channel, data):
+    """Aplica normalize_money a cada segmento narrado (y recalcula full_text)."""
+    lang = (channel.get("language") or "es").lower()
+    cur = channel_currency(channel)
+    changed = []
+    for sg in data.get("segments") or []:
+        t = sg.get("text") or ""
+        n = normalize_money(t, cur, lang)
+        if n != t:
+            changed.append((t, n))
+            sg["text"] = n
+    if changed:
+        data["full_text"] = " ".join((sg.get("text") or "").strip() for sg in data.get("segments") or [])
+    return data, changed
+
+_MONEY_SIGNAL = re.compile(r"(\$|US\$|u\$s|USD|ARS|€|\b(?:d[oó]lar(?:es)?|pesos?|euros?|reales?|cotiz\w*|"
+                           r"precio|cuesta|vale|blue|MEP|CCL)\b)", re.I)
+
+def _has_money(text):
+    return bool(re.search(r"\d", text or "")) and bool(_MONEY_SIGNAL.search(text or ""))
+
+def _check_money(channel, data, source=None):
+    """Doble chequeo con IA: si el guion tiene cifras de dinero, otra pasada revisa la
+    moneda de cada una contra la fuente y las reglas del canal. Best-effort: si falla o
+    devuelve otra forma, el guion queda como estaba (y igual pasa el filtro fijo)."""
+    lang = (channel.get("language") or "es").lower()
+    if not lang.startswith("es"):
+        return data
+    segs = data.get("segments") or []
+    texts = [sg.get("text") or "" for sg in segs]
+    if not any(_has_money(t) for t in texts + [data.get("title") or ""]):
+        return data
+    src = {"title": data.get("title") or "", "description": data.get("description") or "",
+           "segments": texts}
+    prompt = ("Revisá SOLO las cifras de dinero de este guion de video y corregí la moneda donde esté mal "
+              "o sin aclarar. No cambies los números ni nada más del texto.\n"
+              f"{_money_note(channel)}\n"
+              + (f"FUENTE (lo que dice el artículo original; usala para confirmar la moneda de cada cifra):\n"
+                 f"{source[:3500]}\n" if source else "")
+              + "Devolvé SOLO un JSON con la misma forma exacta (mismas claves, misma cantidad de "
+                "elementos en 'segments') y además \"changes\": [lista corta de lo que corregiste, o vacía]:\n"
+              + json.dumps(src, ensure_ascii=False))
+    try:
+        fixed = _extract_json(_call([{"role": "system", "content": SYSTEM},
+                                     {"role": "user", "content": prompt}]))
+        new = fixed.get("segments") or []
+        if len(new) != len(segs) or not all(isinstance(t, str) and t.strip() for t in new):
+            print("[moneda] revisión descartada (forma distinta)")
+            return data
+        # Seguridad: la revisión no puede cambiar las cifras en sí
+        digits = lambda t: re.findall(r"\d+", t.replace(".", "").replace(",", ""))
+        for sg, old, t in zip(segs, texts, new):
+            if digits(old) == digits(t):
+                sg["text"] = t.strip()
+        for k in ("title", "description"):
+            if isinstance(fixed.get(k), str) and fixed[k].strip() and digits(fixed[k]) == digits(data.get(k) or ""):
+                data[k] = fixed[k].strip()
+        if fixed.get("changes"):
+            print(f"[moneda] correcciones: {fixed['changes']}")
+            data.setdefault("_qa_notes", []).append({"moneda": fixed["changes"]})
+    except Exception as e:
+        print(f"[moneda] no se pudo revisar ({e})")
+    return data
+
 # ---- Guardia de voseo ----
 # Los modelos (sobre todo los de respaldo) a veces ignoran la nota de voseo y mezclan
 # tuteo ("elige", "prefiere", "tienes") en un canal rioplatense (nov-2026, WineinColors).
@@ -633,6 +783,7 @@ Tono: {channel.get('tone') or 'informativo'}
 Formato del video: {vtype} — duración objetivo {dur}.
 
 {_language_note(channel)}
+{_money_note(channel)}
 
 VIDEO DE REFERENCIA (viral, {original_views:,} vistas): "{original_title}"
 Transcripción real de ese video (para que saques el TEMA y el RITMO, nunca para copiarla
@@ -671,7 +822,7 @@ Devolvé SOLO un JSON con esta forma EXACTA:
 Keywords SIEMPRE en inglés, concretas y filmables (nada abstracto)."""
     messages = [{"role": "system", "content": SYSTEM}, {"role": "user", "content": prompt}]
     raw = _call_script(messages, vtype)
-    data = _enforce_voseo(channel, _extract_json(raw))
+    data = _check_money(channel, _enforce_voseo(channel, _extract_json(raw)))
     data.setdefault("tags", [])
     data.setdefault("hashtags", [])
     if brand:
@@ -698,7 +849,7 @@ def generate(channel, vtype="short", seed_title=None, trends=None, recent_titles
                                                     top_performers, visual_learning, research_context,
                                                     recent_hooks)}]
     raw = _call_script(messages, vtype)
-    data = _enforce_voseo(channel, _extract_json(raw))
+    data = _check_money(channel, _enforce_voseo(channel, _extract_json(raw)), research_context)
     data.setdefault("tags", [])
     data.setdefault("hashtags", [])
     # Coherencia: asegurar el hashtag de marca del canal en cada video
