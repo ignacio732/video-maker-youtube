@@ -183,7 +183,12 @@ def process_video(v):
             data = None
             try:
                 candidates = []
-                if v.get("remix_of"):
+                if v.get("remix_of") and not _is_video_url(v["remix_of"]):
+                    # Link de una nota/web pegado en "Remix viral" (pasó con una nota de
+                    # Forbes): no tiene subtítulos; se arma sobre el texto de la página.
+                    db.log("remix", "El link no es un video: se arma el video sobre el contenido "
+                                    "de la página", "info", vid, ch["id"])
+                elif v.get("remix_of"):
                     candidates = [{"url": v["remix_of"], "title": None, "view_count": None}]
                 else:
                     kind = v.get("remix_kind") or vtype
@@ -239,13 +244,27 @@ def process_video(v):
                 db.log("remix", f"Falló el remix ({e}); se genera normal", "warn", vid, ch["id"])
             if data is None:
                 # Fallback: generación normal, usando el título original como semilla si lo tenemos.
+                # Si el link es una página (nota, web) o un video sin subtítulos, se intenta leer
+                # su texto para que el video siga siendo SOBRE ese link y no sobre cualquier tema.
+                seed_title, research_context = v.get("title"), None
+                if v.get("remix_of"):
+                    info = trends.fetch_page_info(v["remix_of"])
+                    if info and (info.get("text") or info.get("description")):
+                        research_context = "\n".join(x for x in (
+                            f"Título de la página: {info['title']}" if info.get("title") else "",
+                            f"Resumen: {info['description']}" if info.get("description") else "",
+                            info.get("text") or "") if x)
+                        seed_title = seed_title or (info.get("title") or "")[:140] or None
+                        db.update_video(vid, source_url=v["remix_of"])
+                        db.log("link", f"Link leído OK ({len(info.get('text') or '')} caracteres): "
+                                       f"{info.get('title') or v['remix_of']}", vid=vid, cid=ch["id"])
                 recent_titles = db.get_recent_titles(ch["id"], 40)
                 recent_hooks = db.get_recent_hooks(ch["id"], 12)
                 top_performers = db.get_top_performers(ch["id"], 3)
                 visual_learning = db.get_visual_learnings(ch["id"])
-                data = llm.generate(ch, vtype, seed_title=v.get("title"), recent_titles=recent_titles,
+                data = llm.generate(ch, vtype, seed_title=seed_title, recent_titles=recent_titles,
                                     top_performers=top_performers, visual_learning=visual_learning,
-                                    recent_hooks=recent_hooks)
+                                    research_context=research_context, recent_hooks=recent_hooks)
         else:
             trend_topics = None
             reference_url = None
@@ -1059,6 +1078,10 @@ def main():
             db.log("boost", f"Error: {e}", "error")
         refresh_global_trends()
 
+    try:
+        _recover_orphans()
+    except Exception as e:
+        db.log("run", f"No se pudieron revisar videos huérfanos: {e}", "warn")
     pend = db.get_pending_videos(MAX_VIDEOS)
     db.log("run", f"{len(pend)} videos en cola para procesar")
     for v in pend:
@@ -1084,6 +1107,37 @@ def main():
                 db.log("error", traceback.format_exc()[-800:], "error", v["id"])
 
 MAX_ATTEMPTS = 4
+
+# Una corrida de Actions dura como máximo 50 min (timeout-minutes) y nunca hay dos a la vez
+# (concurrency). Un video que sigue en un paso intermedio mucho después de eso quedó
+# huérfano porque la corrida se cortó (timeout, cancelación, runner caído): sin esto queda
+# trabado para siempre en el pipeline (pasó: 12 días en "Visuales") y además bloquea al
+# canal, que se cree con un video abierto.
+ORPHAN_MINUTES = 75
+
+def _recover_orphans():
+    from datetime import timedelta
+    cutoff = (datetime.now(timezone.utc) - timedelta(minutes=ORPHAN_MINUTES)).isoformat()
+    rows = db._get("videos", {"status": "in.(scripting,voicing,sourcing,rendering)",
+                              "updated_at": f"lt.{cutoff}", "select": "id,channel_id,status,attempts"})
+    for r in rows:
+        attempts = (r.get("attempts") or 0) + 1
+        msg = f"la corrida se cortó en '{r['status']}'"
+        if attempts < MAX_ATTEMPTS:
+            db.update_video(r["id"], status="pending", attempts=attempts,
+                            error=f"reintento {attempts}/{MAX_ATTEMPTS - 1}: {msg}")
+        else:
+            db.update_video(r["id"], status="failed", attempts=attempts, error=msg)
+        db.log("run", f"Video huérfano recuperado ({msg}) → "
+                      f"{'vuelve a la cola' if attempts < MAX_ATTEMPTS else 'fallido'}",
+               "warn", r["id"], r.get("channel_id"))
+
+_VIDEO_HOSTS = ("youtube.com", "youtu.be", "tiktok.com", "instagram.com", "facebook.com",
+                "fb.watch", "vimeo.com", "x.com", "twitter.com", "dailymotion.com", "twitch.tv")
+
+def _is_video_url(url):
+    host = (_re.sub(r"^https?://", "", (url or "").strip().lower()).split("/")[0])
+    return any(host == h or host.endswith("." + h) for h in _VIDEO_HOSTS)
 
 def _is_transient(e):
     """Errores de infraestructura (cupos, red, TTS de Microsoft) que no dependen del video:
