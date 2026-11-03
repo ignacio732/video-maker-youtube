@@ -362,6 +362,14 @@ def process_video(v):
                                         recent_hooks=recent_hooks)
                 else:
                     raise
+        # Filtro fijo de moneda antes de la voz (también para guiones propios del usuario):
+        # "$42.000" → "42.000 pesos" según channels.currency (ver llm.normalize_money).
+        data, money_fixes = llm.normalize_money_data(ch, data)
+        if money_fixes:
+            db.log("script", "Moneda: " + " | ".join(f"«{a}» → «{b}»" for a, b in money_fixes)[:600],
+                   vid=vid, cid=ch["id"])
+        for note in data.pop("_qa_notes", []) or []:
+            db.log("script", f"Revisión IA {note}"[:600], vid=vid, cid=ch["id"])
         db.add_script(vid, data["full_text"], data["segments"])
         db.add_idea(ch["id"], data["title"], data.get("hook"), None, vtype, "used")
         db.update_video(vid, title=data["title"],
