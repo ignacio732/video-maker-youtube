@@ -143,7 +143,8 @@ def get_top_performers(cid, limit=3, min_views=1):
     latest = {}
     for r in rows:
         vid = r["video_id"]
-        if vid not in latest:
+        # el mejor registro del video (hay snapshots por red y por día)
+        if vid not in latest or (r.get("views") or 0) > (latest[vid].get("views") or 0):
             latest[vid] = r
     ranked = sorted(latest.values(), key=lambda r: r.get("views") or 0, reverse=True)
     out = []
@@ -186,13 +187,32 @@ def get_unresolved_publications(limit=200):
 def resolve_publication(pub_id, blotato_post_id):
     return _patch("video_publications", {"id": f"eq.{pub_id}"}, {"blotato_post_id": blotato_post_id})
 
-def add_video_metric(video_id, views=None, likes=None, comments=None, source="blotato"):
+def add_video_metric(video_id, views=None, likes=None, comments=None, source="blotato",
+                     watch_ms_avg=None, reach=None, saves=None, shares=None):
     """Guarda un snapshot de métricas de un video (alimenta get_top_performers y
-    get_visual_learnings, que hasta ahora no tenían de dónde leer datos reales)."""
+    get_visual_learnings). watch_ms_avg = tiempo de visualización promedio: es la señal
+    de retención (cuánto aguanta la gente antes de pasar al siguiente)."""
     return _post("video_metrics", {
         "video_id": video_id, "views": views, "likes": likes, "comments": comments,
-        "source": source,
+        "source": source, "watch_ms_avg": watch_ms_avg, "reach": reach,
+        "saves": saves, "shares": shares,
     })
+
+def get_recent_publications(days=14, limit=400):
+    """Publicaciones exitosas recientes, con título/descripción del video, para
+    emparejarlas con los posts reales que informa Blotato."""
+    from datetime import datetime, timezone, timedelta
+    since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    return _get("video_publications", {
+        "status": "eq.ok", "published_at": f"gte.{since}",
+        "select": "id,video_id,platform,post_url,blotato_post_id,published_at,videos(title,description)",
+        "order": "published_at.desc", "limit": str(limit)})
+
+def link_publication(pub_id, blotato_post_id, post_url=None):
+    body = {"blotato_post_id": str(blotato_post_id)}
+    if post_url:
+        body["post_url"] = post_url
+    return _patch("video_publications", {"id": f"eq.{pub_id}"}, body)
 
 def best_hour_utc(cid, min_sample=5):
     """Hora UTC (0-23) con mejor promedio de vistas históricas de publicación para
@@ -206,8 +226,7 @@ def best_hour_utc(cid, min_sample=5):
     metrics = _get("video_metrics", {"select": "video_id,views,fetched_at", "order": "fetched_at.desc"})
     latest = {}
     for m in metrics:
-        if m["video_id"] not in latest:
-            latest[m["video_id"]] = m.get("views") or 0
+        latest[m["video_id"]] = max(latest.get(m["video_id"], 0), m.get("views") or 0)
     buckets = {}
     for p in pubs:
         v = latest.get(p["video_id"])
@@ -238,8 +257,8 @@ def get_channel_metrics(cid):
     latest = {}
     for m in metrics:
         vid = m["video_id"]
-        if vid in by_id and vid not in latest:
-            latest[vid] = m.get("views") or 0
+        if vid in by_id:
+            latest[vid] = max(latest.get(vid, 0), m.get("views") or 0)
     out = []
     for vid, views in latest.items():
         v = by_id[vid]
@@ -586,8 +605,7 @@ def get_visual_learnings(cid, min_sample=3):
     metrics = _get("video_metrics", {"select": "video_id,views,fetched_at", "order": "fetched_at.desc"})
     latest = {}
     for m in metrics:
-        if m["video_id"] not in latest:
-            latest[m["video_id"]] = m["views"] or 0
+        latest[m["video_id"]] = max(latest.get(m["video_id"], 0), m["views"] or 0)
     human_views = [latest[vid] for vid, is_human in hooks.items() if is_human and vid in latest]
     other_views = [latest[vid] for vid, is_human in hooks.items() if not is_human and vid in latest]
     if len(human_views) < min_sample or len(other_views) < min_sample:
