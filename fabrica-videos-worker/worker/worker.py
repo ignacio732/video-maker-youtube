@@ -424,7 +424,13 @@ def process_video(v):
 
         # 3) SUBTÍTULOS
         w, h = (1080, 1920) if vtype == "short" else (1920, 1080)
-        ass = render.build_ass(words, os.path.join(td, "subs.ass"), w=w, h=h)
+        # Titular escrito en los primeros segundos (solo shorts): el gancho se lee aunque
+        # el video esté en silencio. Se usa el texto de miniatura (corto) o el título.
+        headline = None
+        if vtype == "short":
+            headline = (data.get("thumbnail_text") or data.get("title") or "").strip() or None
+        ass = render.build_ass(words, os.path.join(td, "subs.ass"), w=w, h=h,
+                               headline=headline, accent=ch.get("accent_color"))
 
         # 4) VISUALES: imágenes propias > stock relevante por segmento (vídeo/foto) > gradiente
         db.set_status(vid, "sourcing")
@@ -1002,47 +1008,81 @@ def refresh_global_trends():
     except Exception as e:
         db.log("trends", f"refresh global falló: {e}", "warn")
 
+def _norm_txt(t):
+    import unicodedata
+    t = unicodedata.normalize("NFKD", (t or "").lower())
+    return _re.sub(r"[^a-z0-9]", "", t)
+
 def sync_analytics():
-    """Resuelve el id de analytics de Blotato para publicaciones recientes (matcheando
-    por post_url) y guarda un snapshot de vistas/likes/comentarios en video_metrics —
-    la tabla que get_top_performers() y get_visual_learnings() ya leían pero que hasta
-    ahora nadie alimentaba. Corre una vez por corrida del worker, es liviano (1-2 GETs)."""
+    """Empareja nuestras publicaciones recientes con los posts reales que informa Blotato
+    y guarda métricas en video_metrics, incluido el tiempo de visualización promedio.
+
+    Antes solo se emparejaba por post_url, y casi ninguna publicación de Instagram/TikTok
+    tiene post_url guardado (Blotato publica de forma asíncrona), así que esas redes nunca
+    tenían métricas. Ahora también se empareja por el texto del post (descripción/título).
+    Un snapshot al emparejar por primera vez y después 4 veces por día, para ver cómo
+    evoluciona la retención sin llenar la tabla."""
     api_key = (db.get_secret("blotato_api_key") or {}).get("key")
     if not api_key:
         return
     import blotato
-    pending = db.get_unresolved_publications(limit=200)
-    if not pending:
+    pubs = db.get_recent_publications(days=14)
+    if not pubs:
         return
-    by_url = {p["post_url"]: p for p in pending if p.get("post_url")}
-    if not by_url:
+    now = datetime.now(timezone.utc)
+    refresh = (now.hour % 6 == 0 and now.minute < 15)
+    if not refresh and all(p.get("blotato_post_id") for p in pubs):
         return
-    since = min(p["published_at"] for p in pending)
-    try:
-        items = blotato.list_top_performing(api_key, since=since, limit=100)
-    except Exception as e:
-        db.log("analytics", f"Error consultando Blotato analytics: {e}", "warn")
-        return
-    matched = 0
-    for it in items:
-        url = it.get("postUrl")
-        pub = by_url.get(url)
-        if not pub:
+    since = min(p["published_at"] for p in pubs)
+    matched = snaps = 0
+    for platform in sorted({p["platform"] for p in pubs}):
+        try:
+            items = blotato.list_top_performing(api_key, since=since, platform=platform, limit=100)
+        except Exception as e:
+            db.log("analytics", f"Error consultando Blotato analytics ({platform}): {e}", "warn")
             continue
-        db.resolve_publication(pub["id"], it.get("id"))
-        m = (it.get("latestMetrics") or {}).get("metrics") or {}
-        def _num(key):
-            v = m.get(key)
-            try:
-                return int(v) if v is not None else None
-            except (TypeError, ValueError):
-                return None
-        db.add_video_metric(pub["video_id"], views=_num("viewsCount"),
-                            likes=_num("likesCount"), comments=_num("commentsCount"),
-                            source="blotato")
-        matched += 1
-    if matched:
-        db.log("analytics", f"Sincronizadas métricas de {matched} publicación(es)")
+        by_id = {str(it.get("id")): it for it in items}
+        by_url = {it.get("postUrl"): it for it in items if it.get("postUrl")}
+        used = {str(p["blotato_post_id"]) for p in pubs if p.get("blotato_post_id")}
+        for pub in (p for p in pubs if p["platform"] == platform):
+            it, new = None, False
+            if pub.get("blotato_post_id"):
+                it = by_id.get(str(pub["blotato_post_id"]))
+            elif pub.get("post_url") and pub["post_url"] in by_url:
+                it, new = by_url[pub["post_url"]], True
+            else:
+                v = pub.get("videos") or {}
+                keys = [k for k in (_norm_txt(v.get("description"))[:40], _norm_txt(v.get("title"))[:40])
+                        if len(k) >= 20]
+                for cand in items:
+                    if str(cand.get("id")) in used:
+                        continue
+                    head = _norm_txt((cand.get("content") or "")[:500])
+                    if any(k in head for k in keys):
+                        it, new = cand, True
+                        break
+            if not it:
+                continue
+            if new:
+                used.add(str(it.get("id")))
+                db.link_publication(pub["id"], it.get("id"), it.get("postUrl"))
+                matched += 1
+            if not (new or refresh):
+                continue
+            m = (it.get("latestMetrics") or {}).get("metrics") or {}
+            def _num(key):
+                try:
+                    return int(float(m[key])) if m.get(key) not in (None, "") else None
+                except (TypeError, ValueError):
+                    return None
+            db.add_video_metric(pub["video_id"], views=_num("viewsCount"),
+                                likes=_num("likesCount"), comments=_num("commentsCount"),
+                                source=f"blotato:{platform}", watch_ms_avg=_num("watchTimeMsAvg"),
+                                reach=_num("reachCount"), saves=_num("savesCount"),
+                                shares=_num("sharesCount"))
+            snaps += 1
+    if matched or snaps:
+        db.log("analytics", f"Blotato: {matched} publicación(es) emparejada(s), {snaps} snapshot(s) de métricas")
 
 def _repurpose_overperformers():
     """Si un video superó por mucho el promedio de vistas de su canal (2.5x, con
