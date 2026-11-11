@@ -52,6 +52,18 @@ def _try_fetch(url, params, out_path, timeout):
         pass
     return False
 
+def _crop_watermark(path, frac=0.055):
+    """El servicio a veces ignora 'nologo' y estampa 'pollinations.ai' abajo a la derecha
+    (se vio en videos publicados). Se recorta la franja inferior; el render igual escala
+    y recorta la imagen al cuadro, así que no se nota."""
+    try:
+        from PIL import Image
+        im = Image.open(path).convert("RGB")
+        w, h = im.size
+        im.crop((0, 0, w, int(h * (1 - frac)))).save(path, quality=92)
+    except Exception:
+        pass
+
 def _generate_one(prompt, out_path, w, h, seed, style_text, model, retries=3):
     """Reintenta con backoff; si el modelo principal falla, prueba 'turbo' (más liviano)."""
     full = f"{prompt.strip()}, {style_text}" if style_text else prompt.strip()
@@ -64,6 +76,7 @@ def _generate_one(prompt, out_path, w, h, seed, style_text, model, retries=3):
         m = models[min(attempt, len(models) - 1)]  # últimos intentos usan turbo
         params = dict(base_params, model=m)
         if _try_fetch(url, params, out_path, timeout=150):
+            _crop_watermark(out_path)
             return out_path
         time.sleep(3 * (attempt + 1))
     return None
