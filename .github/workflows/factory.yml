@@ -24,7 +24,20 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Instalar ffmpeg
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg fonts-dejavu-core
+        # apt a veces queda colgado contra el mirror de Ubuntu (11/11/2026: corridas trabadas
+        # más de 20 min en este paso). Límite de tiempo + reintentos, y si igual falla se
+        # baja un ffmpeg estático desde GitHub.
+        timeout-minutes: 6
+        run: |
+          APT="sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 -o DPkg::Lock::Timeout=60"
+          if ! (timeout 90 $APT update && timeout 180 $APT install -y ffmpeg fonts-dejavu-core); then
+            echo "apt falló o tardó demasiado: uso ffmpeg estático"
+            curl -fsSL --retry 3 --max-time 150 -o /tmp/ffmpeg.tar.xz \
+              https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl.tar.xz
+            mkdir -p /tmp/ffmpeg && tar -xJf /tmp/ffmpeg.tar.xz -C /tmp/ffmpeg --strip-components=1
+            sudo cp /tmp/ffmpeg/bin/ffmpeg /tmp/ffmpeg/bin/ffprobe /usr/local/bin/
+          fi
+          ffmpeg -version | head -1
 
       - uses: actions/setup-python@v5
         with:
@@ -33,7 +46,9 @@ jobs:
       - name: Instalar dependencias
         run: pip install -r requirements.txt
       - name: Instalar Chromium (para capturas de pantalla reales)
-        run: playwright install --with-deps chromium
+        timeout-minutes: 8
+        continue-on-error: true   # las capturas son opcionales; no deben frenar la fábrica
+        run: timeout 420 playwright install --with-deps chromium
       - name: Ejecutar worker
         env:
           SUPABASE_URL:         ${{ secrets.SUPABASE_URL }}
