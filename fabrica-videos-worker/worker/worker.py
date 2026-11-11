@@ -429,8 +429,20 @@ def process_video(v):
         headline = None
         if vtype == "short":
             headline = (data.get("thumbnail_text") or data.get("title") or "").strip() or None
+        # Si el short abre con una intro de avatar, el titular va sobre la intro (que es el
+        # primer plano del video) y no se repite al arrancar la narración.
+        intro_pre = None
+        try:
+            if (ch.get("avatar_enabled") and vtype == "short" and avatar
+                    and (ch.get("avatar_mode") or "intro").lower() in ("intro", "intro_outro")):
+                intro_pre = db.get_ready_avatar_clip(
+                    ch["id"], "intro", avatar=avatar,
+                    topic=f"{data.get('title') or ''} {data.get('full_text') or ''}")
+        except Exception:
+            intro_pre = None
         ass = render.build_ass(words, os.path.join(td, "subs.ass"), w=w, h=h,
-                               headline=headline, accent=ch.get("accent_color"))
+                               headline=None if intro_pre else headline,
+                               accent=ch.get("accent_color"))
 
         # 4) VISUALES: imágenes propias > stock relevante por segmento (vídeo/foto) > gradiente
         db.set_status(vid, "sourcing")
@@ -591,8 +603,9 @@ def process_video(v):
             mode = (ch.get("avatar_mode") or "intro").lower()
             if mode in ("intro", "intro_outro"):
                 try:
-                    intro = db.get_ready_avatar_clip(ch["id"], "intro", avatar=avatar,
-                                                     topic=f"{data.get('title') or ''} {data.get('full_text') or ''}")
+                    intro = intro_pre or db.get_ready_avatar_clip(
+                        ch["id"], "intro", avatar=avatar,
+                        topic=f"{data.get('title') or ''} {data.get('full_text') or ''}")
                     outro = db.get_ready_avatar_clip(ch["id"], "outro", prefer_wardrobe=(intro or {}).get("wardrobe"),
                                                      avatar=avatar) \
                         if mode == "intro_outro" else None
@@ -600,6 +613,18 @@ def process_video(v):
                         intro_path = _download(intro["clip_url"], os.path.join(td, "avatar_intro.mp4"))
                         outro_path = _download(outro["clip_url"], os.path.join(td, "avatar_outro.mp4")) \
                             if outro else None
+                        # Subtítulos + titular sobre los clips del avatar (antes iban sin texto)
+                        try:
+                            intro_path = render.caption_avatar_clip(
+                                intro_path, intro.get("transcript"), os.path.join(td, "avatar_intro_cc.mp4"),
+                                w=w, h=h, headline=headline, accent=ch.get("accent_color"),
+                                trim_lead=True)
+                            if outro_path:
+                                outro_path = render.caption_avatar_clip(
+                                    outro_path, outro.get("transcript"), os.path.join(td, "avatar_outro_cc.mp4"),
+                                    w=w, h=h)
+                        except Exception as e:
+                            db.log("avatar", f"No se pudieron subtitular los clips del avatar: {e}", "warn", vid, ch["id"])
                         merged = os.path.join(td, "final_with_avatar.mp4")
                         render.prepend_avatar_clip(intro_path, out, merged, w=w, h=h, outro_path=outro_path)
                         out = merged
