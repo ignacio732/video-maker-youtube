@@ -106,9 +106,9 @@ def _prompt(channel, vtype, seed_title, trends, recent_titles=None, top_performe
             dur = f"~{target_sec} segundos (entre {lo} y {hi})"
             n_seg = max(4, min(30, round(target_sec / 4)))
         else:
-            dur = "18 a 28 segundos"
+            dur = "15 a 25 segundos"
             n_seg = None
-        seg_hint = ((f"{n_seg-1} a {n_seg+1} segmentos. " if n_seg else "6 a 8 segmentos. ") +
+        seg_hint = ((f"{n_seg-1} a {n_seg+1} segmentos. " if n_seg else "5 a 7 segmentos. ") +
                     "Cada 'text' = UNA frase corta (8-12 palabras). "
                     "Segmento 1 = el GANCHO (aparece como texto y voz). "
                     "Último segmento = UN solo CTA breve que además encadene con el gancho (loop).")
@@ -772,7 +772,7 @@ def remix_script(channel, vtype, original_title, original_views, original_segmen
                 f"(ni mucho más largo ni mucho más corto), mismo nivel de energía/urgencia.\n"
                 if hook_dur else "")
     if vtype == "short":
-        dur, seg_hint = "18 a 28 segundos", "6 a 8 segmentos. Cada 'text' = UNA frase corta (8-12 palabras)."
+        dur, seg_hint = "15 a 25 segundos", "5 a 7 segmentos. Cada 'text' = UNA frase corta (7-10 palabras)."
     else:
         dur, seg_hint = "4 a 7 minutos", "14 a 20 segmentos, un giro/dato nuevo cada 5-7 segundos."
     brand = (channel.get("brand_hashtag") or "").strip()
