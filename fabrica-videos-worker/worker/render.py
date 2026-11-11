@@ -622,8 +622,19 @@ def compose_timeline(visuals, durations, audio_mp3, ass_path, out_mp4,
                 else:
                     src = make_gradient_bg(theme, os.path.join(td, f"grad_{idx}.png"), w, h)
                 inputs += ["-loop", "1", "-t", f"{dur:.2f}", "-i", src]
+                if vis.get("source") == "main_image":
+                    # Imagen real de la nota (suele ser apaisada y con texto): entera, sobre
+                    # su propio fondo desenfocado. Recortada a pantalla completa se cortaban
+                    # las letras por los costados.
+                    fit = (f"[{idx}:v]split[m{idx}a][m{idx}b];"
+                           f"[m{idx}a]scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h},"
+                           f"boxblur=30:4,eq=brightness=-0.12[m{idx}bg];"
+                           f"[m{idx}b]scale={w}:{h}:force_original_aspect_ratio=decrease[m{idx}fg];"
+                           f"[m{idx}bg][m{idx}fg]overlay=(W-w)/2:(H-h)/2,")
+                else:
+                    fit = f"[{idx}:v]scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h},"
                 filters.append(
-                    f"[{idx}:v]scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h},"
+                    f"{fit}"
                     f"zoompan=z='min(zoom+0.0012,1.15)':d={frames}:"
                     f"x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s={w}x{h}:fps=30,"
                     f"trim=0:{dur:.2f},setsar=1,setpts=PTS-STARTPTS[v{idx}]")
