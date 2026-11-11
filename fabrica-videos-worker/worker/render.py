@@ -666,9 +666,45 @@ def concat_parts(parts, out_mp4, w=1080, h=1920):
     fc = ";".join(filters) + f";{concat_in}concat=n={n}:v=1:a=1[vout][aout]"
     cmd = ["ffmpeg", "-y"] + inputs + ["-filter_complex", fc,
            "-map", "[vout]", "-map", "[aout]",
-           "-c:v", "libx264", "-preset", "medium", "-crf", "23",
+           "-c:v", "libx264", "-preset", "medium", "-crf", "20",
            "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k", "-r", "30", out_mp4]
     _run(cmd)
+    return out_mp4
+
+def caption_avatar_clip(clip_path, transcript, out_mp4, w=1080, h=1920, headline=None, accent=None,
+                        trim_lead=False):
+    """Quema subtítulos (y el titular, si se pasa) sobre un clip de avatar. La intro del
+    avatar son los primeros 5-6 s del short y antes iban SIN texto: quien mira en silencio
+    no sabía de qué iba el video justo en el tramo donde decide si se queda (nov-2026).
+    Los tiempos por palabra salen de las pausas reales del audio del clip."""
+    if not (transcript or "").strip():
+        return clip_path
+    with tempfile.TemporaryDirectory() as td:
+        wav = os.path.join(td, "a.wav")
+        _run(["ffmpeg", "-y", "-i", clip_path, "-vn", "-ac", "1", "-ar", "16000", wav])
+        if trim_lead:
+            # Algunos clips arrancan con 2-3 s del avatar callado ("pensando") antes de la
+            # primera palabra: en un short es tiempo muerto justo en el gancho. Se recorta
+            # dejando 0.25 s de aire.
+            sil = _silences(wav)
+            if sil and sil[0][0] <= 0.05 and sil[0][1] > 0.7:
+                cut = max(0.0, sil[0][1] - 0.25)
+                trimmed = os.path.join(td, "trim.mp4")
+                _run(["ffmpeg", "-y", "-ss", f"{cut:.2f}", "-i", clip_path, "-c:v", "libx264",
+                      "-preset", "medium", "-crf", "18", "-c:a", "aac", "-b:a", "192k", trimmed])
+                clip_path = trimmed
+                _run(["ffmpeg", "-y", "-i", clip_path, "-vn", "-ac", "1", "-ar", "16000", wav])
+        words = _align_by_silence(transcript.strip(), wav)
+        if not words:
+            return clip_path
+        dur = audio_duration(clip_path)
+        ass = build_ass(words, os.path.join(td, "av.ass"), w=w, h=h, headline=headline,
+                        headline_secs=max(2.6, dur - 0.2), accent=accent)
+        _run(["ffmpeg", "-y", "-i", clip_path, "-vf",
+              f"scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h},fps=30,setsar=1,"
+              f"{_ass_filter(ass)}",
+              "-c:v", "libx264", "-preset", "medium", "-crf", "20", "-pix_fmt", "yuv420p",
+              "-c:a", "aac", "-b:a", "192k", out_mp4])
     return out_mp4
 
 def prepend_avatar_clip(avatar_path, body_path, out_mp4, w=1080, h=1920, outro_path=None):
