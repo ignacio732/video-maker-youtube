@@ -230,44 +230,100 @@ def _ass_time(t):
     h = int(t // 3600); m = int((t % 3600) // 60); s = t % 60
     return f"{h:d}:{m:02d}:{s:05.2f}"
 
-def build_ass(words, out_ass, w=1080, h=1920, fontsize=None, margin_v=None):
+FONTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts")
+CAPTION_FONT = "Anton" if os.path.exists(os.path.join(FONTS_DIR, "Anton-Regular.ttf")) else "DejaVu Sans"
+
+def _ass_filter(ass_path):
+    """Filtro 'ass' con la carpeta de fuentes propia (Anton), para no depender de las
+    fuentes instaladas en el runner."""
+    f = "ass=" + ass_path.replace(":", "\\:")
+    if os.path.isdir(FONTS_DIR):
+        f += ":fontsdir=" + FONTS_DIR.replace(":", "\\:")
+    return f
+
+def _caption_groups(words, max_words=3, max_chars=15, max_gap=0.45):
+    """Grupos cortos (2-3 palabras) que se leen de un vistazo. Corta el grupo en pausas
+    y signos de puntuación para que cada bloque sea una idea."""
+    groups, cur = [], []
+    for w in words:
+        txt = w["text"]
+        if cur:
+            length = len(" ".join(x["text"] for x in cur) + " " + txt)
+            gap = w["start"] - cur[-1]["end"]
+            ends = cur[-1]["text"][-1:] in ".,;:!?…"
+            if len(cur) >= max_words or length > max_chars or gap > max_gap or ends:
+                groups.append(cur); cur = []
+        cur.append(w)
+    if cur:
+        groups.append(cur)
+    return groups
+
+def build_ass(words, out_ass, w=1080, h=1920, fontsize=None, margin_v=None, headline=None,
+              headline_secs=2.6, accent=None):
     """
-    Subtítulos VIRALES estilo Hormozi/TikTok: palabra por palabra, MAYÚSCULAS,
-    fuente grande y gruesa, contorno negro, 'pop' de escala y palabra clave en amarillo.
-    Aprovecha los timings por palabra derivados del TTS.
+    Subtítulos estilo short viral (nov-2026): bloques de 2-3 palabras en MAYÚSCULAS con
+    tipografía gruesa (Anton); la palabra que se está diciendo se resalta en amarillo y
+    hace un 'pop'. Antes era una sola palabra por vez en DejaVu Sans: costaba seguir la
+    idea y se veía genérico.
+
+    headline: titular que se muestra arriba durante los primeros segundos (el gancho
+    escrito). La mayoría mira sin sonido y decide en 1-2 s si se queda: el titular le
+    dice de qué va el video antes de que la voz termine la primera frase.
     """
     WHITE = "&H00FFFFFF"
-    YELLOW = "&H0000FFFF"      # énfasis (BGR)
-    fontsize = fontsize or int(w * (0.095 if w < h else 0.06))
-    margin_v = margin_v or int(h * 0.34)
-    outline = max(6, int(fontsize * 0.11))
+    YELLOW = "&H0000E5FF"      # amarillo cálido (BGR)
+    vertical = w < h
+    fontsize = fontsize or int(w * (0.118 if vertical else 0.062))
+    margin_v = margin_v or int(h * (0.30 if vertical else 0.10))
+    outline = max(6, int(fontsize * 0.09))
+    head_size = int(w * (0.092 if vertical else 0.045))
+    head_margin = int(h * (0.13 if vertical else 0.07))
+    r, g, b_ = _hex_rgb(accent) if accent else (255, 61, 87)
+    head_box = f"&H00{b_:02X}{g:02X}{r:02X}"
     header = f"""[Script Info]
 ScriptType: v4.00+
 PlayResX: {w}
 PlayResY: {h}
-WrapStyle: 2
+WrapStyle: 0
+ScaledBorderAndShadow: yes
 
 [V4+ Styles]
-Format: Name, Fontname, Fontsize, PrimaryColour, OutlineColour, BackColour, Bold, Outline, Shadow, Alignment, MarginL, MarginR, MarginV
-Style: Main,DejaVu Sans,{fontsize},{WHITE},&H00000000,&H90000000,-1,{outline},3,2,40,40,{margin_v}
+Format: Name, Fontname, Fontsize, PrimaryColour, OutlineColour, BackColour, Bold, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, BorderStyle, Spacing
+Style: Main,{CAPTION_FONT},{fontsize},{WHITE},&H00000000,&H96000000,0,{outline},4,2,60,60,{margin_v},1,1
+Style: Head,{CAPTION_FONT},{head_size},{WHITE},{head_box},{head_box},0,{int(head_size * 0.22)},0,8,70,70,{head_margin},3,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
+    clean = lambda t: t.replace("{", "").replace("}", "").replace("\\", "").upper()
     body = []
-    n = len(words)
-    for i, wd in enumerate(words):
-        start = wd["start"]
-        end = words[i + 1]["start"] if i + 1 < n else wd["end"]
-        if end <= start:
-            end = start + 0.25
-        clean = re.sub(r"[^0-9A-Za-zÁÉÍÓÚÜÑáéíóúüñ]", "", wd["text"])
-        color = YELLOW if len(clean) >= 6 else WHITE
-        txt = wd["text"].upper()
-        # pop de escala + fade rápido; palabra larga => amarillo (énfasis)
-        tag = (f"{{\\an2\\c{color}\\fad(30,20)"
-               f"\\t(0,80,\\fscx116\\fscy116)\\t(80,150,\\fscx100\\fscy100)}}")
-        body.append(f"Dialogue: 0,{_ass_time(start)},{_ass_time(end)},Main,,0,0,0,,{tag}{txt}")
+    if headline and words:
+        ht = clean(headline.strip())[:44]
+        end = min(headline_secs, max(1.2, words[-1]["end"]))
+        body.append(f"Dialogue: 1,{_ass_time(0)},{_ass_time(end)},Head,,0,0,0,,"
+                    f"{{\\an8\\fad(0,250)\\t(0,140,\\fscx104\\fscy104)\\t(140,260,\\fscx100\\fscy100)}}{ht}")
+    groups = _caption_groups(words)
+    for gi, grp in enumerate(groups):
+        nxt = groups[gi + 1][0]["start"] if gi + 1 < len(groups) else None
+        for i, wd in enumerate(grp):
+            start = wd["start"]
+            if i + 1 < len(grp):
+                end = grp[i + 1]["start"]
+            else:
+                # el bloque queda hasta que arranca el siguiente (sin huecos en pantalla),
+                # pero no más de 0.6 s después de la última palabra
+                end = min(nxt, wd["end"] + 0.6) if nxt is not None else wd["end"] + 0.3
+            if end <= start:
+                end = start + 0.2
+            parts = []
+            for j, x in enumerate(grp):
+                t = clean(x["text"])
+                if j == i:
+                    parts.append(f"{{\\c{YELLOW}\\fscx112\\fscy112\\t(0,90,\\fscx100\\fscy100)}}{t}{{\\c{WHITE}}}")
+                else:
+                    parts.append(t)
+            pre = "{\\an2\\fad(40,0)}" if i == 0 else "{\\an2}"
+            body.append(f"Dialogue: 0,{_ass_time(start)},{_ass_time(end)},Main,,0,0,0,,{pre}{' '.join(parts)}")
     with open(out_ass, "w") as f:
         f.write(header + "\n".join(body) + "\n")
     return out_ass
@@ -457,7 +513,7 @@ def compose_from_gradient(theme, audio_mp3, ass_path, out_mp4,
         # zoompan lento (Ken Burns) sobre el gradiente
         vf = (f"zoompan=z='min(zoom+0.0006,1.12)':d={int(dur*30)}:"
               f"x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s={w}x{h}:fps=30,"
-              f"ass={ass}")
+              f"{_ass_filter(ass_path)}")
         title_draw = ""
         if title:
             safe = title.replace("'", "").replace(":", " ")
@@ -494,7 +550,7 @@ def compose_from_clips(clips, audio_mp3, ass_path, out_mp4, w=1080, h=1920, musi
                 f"crop={w}:{h},trim=0:{per:.2f},setpts=PTS-STARTPTS[v{idx}]")
         concat = "".join(f"[v{i}]" for i in range(n)) + f"concat=n={n}:v=1:a=0[vc]"
         ass = ass_path.replace(":", "\\:")
-        fc = ";".join(filters) + ";" + concat + f";[vc]ass={ass}[vout]"
+        fc = ";".join(filters) + ";" + concat + f";[vc]{_ass_filter(ass_path)}[vout]"
         cmd = ["ffmpeg","-y"] + inputs + ["-i", audio_mp3]
         ai = n  # audio input index
         if music and os.path.exists(music):
@@ -508,6 +564,9 @@ def compose_from_clips(clips, audio_mp3, ass_path, out_mp4, w=1080, h=1920, musi
                 "-pix_fmt","yuv420p","-c:a","aac","-b:a","192k","-r","30", out_mp4]
         _run(cmd)
     return out_mp4
+
+PUNCH_MIN_SECS = 3.2   # clips de stock más largos que esto llevan un acercamiento a la mitad
+PUNCH_ZOOM = 1.14
 
 def compose_timeline(visuals, durations, audio_mp3, ass_path, out_mp4,
                      w=1080, h=1920, theme="generic", music=None):
@@ -541,9 +600,21 @@ def compose_timeline(visuals, durations, audio_mp3, ass_path, out_mp4,
             path = vis.get("path")
             if vtype == "video" and path and os.path.exists(path):
                 inputs += ["-stream_loop", "-1", "-i", path]
-                filters.append(
-                    f"[{idx}:v]scale={w}:{h}:force_original_aspect_ratio=increase,"
-                    f"crop={w}:{h},trim=0:{dur:.2f},setpts=PTS-STARTPTS,fps=30,setsar=1[v{idx}]")
+                base = (f"[{idx}:v]scale={w}:{h}:force_original_aspect_ratio=increase,"
+                        f"crop={w}:{h},trim=0:{dur:.2f},setpts=PTS-STARTPTS,fps=30,setsar=1")
+                if dur >= PUNCH_MIN_SECS:
+                    # Cambio de plano a mitad del clip (acercamiento seco): un mismo plano
+                    # quieto por más de ~3 s es donde la gente pasa al siguiente video.
+                    half = dur / 2.0
+                    zw, zh = int(w * PUNCH_ZOOM) // 2 * 2, int(h * PUNCH_ZOOM) // 2 * 2
+                    filters.append(
+                        f"{base},split[p{idx}a][p{idx}b];"
+                        f"[p{idx}a]trim=0:{half:.2f},setpts=PTS-STARTPTS[q{idx}a];"
+                        f"[p{idx}b]trim={half:.2f}:{dur:.2f},setpts=PTS-STARTPTS,"
+                        f"scale={zw}:{zh},crop={w}:{h},setsar=1[q{idx}b];"
+                        f"[q{idx}a][q{idx}b]concat=n=2:v=1:a=0[v{idx}]")
+                else:
+                    filters.append(f"{base}[v{idx}]")
             else:
                 # imagen o gradiente → foto/tarjeta con Ken Burns
                 if vtype == "image" and path and os.path.exists(path):
@@ -557,18 +628,21 @@ def compose_timeline(visuals, durations, audio_mp3, ass_path, out_mp4,
                     f"x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s={w}x{h}:fps=30,"
                     f"trim=0:{dur:.2f},setsar=1,setpts=PTS-STARTPTS[v{idx}]")
         concat = "".join(f"[v{i}]" for i in range(n)) + f"concat=n={n}:v=1:a=0[vc]"
-        ass = ass_path.replace(":", "\\:")
-        fc = ";".join(filters) + ";" + concat + f";[vc]ass={ass}[vout]"
+        fc = ";".join(filters) + ";" + concat + f";[vc]{_ass_filter(ass_path)}[vout]"
         cmd = ["ffmpeg", "-y"] + inputs + ["-i", audio_mp3]
         ai = n
         if music and os.path.exists(music):
             cmd += ["-stream_loop", "-1", "-i", music]
-            fc += f";[{ai}:a]volume=1.0[vv];[{ai+1}:a]volume=0.12[mm];[vv][mm]amix=inputs=2:duration=first[aout]"
+            # Música más presente en las pausas y que baja sola cuando habla la voz
+            # (sidechain): antes iba fija al 12% y casi no se notaba.
+            fc += (f";[{ai}:a]asplit=2[vv][vkey];[{ai+1}:a]volume=0.30[mraw];"
+                   f"[mraw][vkey]sidechaincompress=threshold=0.02:ratio=10:attack=15:release=350[mm];"
+                   f"[vv][mm]amix=inputs=2:duration=first:normalize=0[aout]")
             amap = "[aout]"
         else:
             amap = f"{ai}:a"
         cmd += ["-filter_complex", fc, "-map", "[vout]", "-map", amap,
-                "-t", f"{total:.2f}", "-c:v", "libx264", "-preset", "medium", "-crf", "23",
+                "-t", f"{total:.2f}", "-c:v", "libx264", "-preset", "medium", "-crf", "20",
                 "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k", "-r", "30", out_mp4]
         _run(cmd)
     return out_mp4
@@ -660,7 +734,7 @@ def compose_from_images(images, audio_mp3, ass_path, out_mp4, w=1080, h=1920, mu
             f"trim=0:{per:.2f},setsar=1,setpts=PTS-STARTPTS[v{idx}]")
     concat = "".join(f"[v{i}]" for i in range(n)) + f"concat=n={n}:v=1:a=0[vc]"
     ass = ass_path.replace(":", "\\:")
-    fc = ";".join(filters) + ";" + concat + f";[vc]ass={ass}[vout]"
+    fc = ";".join(filters) + ";" + concat + f";[vc]{_ass_filter(ass_path)}[vout]"
     cmd = ["ffmpeg", "-y"] + inputs + ["-i", audio_mp3]
     ai = n
     if music and os.path.exists(music):
