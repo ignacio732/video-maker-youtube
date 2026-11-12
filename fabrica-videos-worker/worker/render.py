@@ -180,7 +180,87 @@ def _align_by_silence(text, audio_path):
         words.extend(_split_sentence(sent, a, max(0.05, b - a)))
     return words
 
-def synth_voice(text, voice, out_mp3, rate=None, fallback_voice=None, style=None, with_voice=False):
+
+# --- Palabras en inglés dentro de una locución en castellano -------------------------
+# Una voz es-* lee "Wine in Colors" con fonética española. Se separan esas frases, se
+# sintetizan con una voz inglesa del mismo género y se empalman en el audio final.
+_EN_TERMS = ["wine in colors", "winein colors", "wineincolors", "wine tasting", "wine bar", "wine tour", "wine club",
+             "wine", "rooftop", "tips", "tip", "tour", "tours", "check-in", "check in", "roaming", "eSIM", "hotspot",
+             "streaming", "podcast", "reels", "reel", "shorts", "influencer", "marketing", "startup", "startups",
+             "freelance", "coworking", "ChatGPT", "OpenAI", "Instagram", "TikTok", "YouTube", "Google", "iPhone",
+             "WhatsApp", "Netflix", "Spotify", "Airbnb", "Booking", "Uber", "bitcoin", "blue chip", "cash", "brunch",
+             "picnic", "happy hour", "spa", "glamping", "trekking", "rafting", "outlet", "delivery", "take away"]
+# Español/otros idiomas donde la palabra ya se lee bien con la voz española: no tocar.
+_EN_SKIP = {"tour", "tours", "tip", "tips", "spa", "picnic", "marketing", "bitcoin", "delivery", "cash", "outlet", "wine"}
+
+def foreign_segments(text, extra_terms=()):
+    """Parte el texto en [(lang, trozo)] con lang 'es' o 'en'. 'extra_terms' = marca/canal
+    (ej. 'WineinColors', se normaliza a 'Wine in Colors')."""
+    terms = [t for t in _EN_TERMS if t.lower() not in _EN_SKIP]
+    for t in extra_terms or ():
+        t = (t or "").strip()
+        if t:
+            terms.append(t)
+    terms = sorted(set(terms), key=len, reverse=True)
+    if not terms:
+        return [("es", text)]
+    pat = re.compile(r"(?<![\wáéíóúñ])(" + "|".join(re.escape(t).replace(r"\ ", r"\s+") for t in terms) + r")(?![\wáéíóúñ])", re.I)
+    out, pos = [], 0
+    for m in pat.finditer(text):
+        if m.start() > pos:
+            out.append(("es", text[pos:m.start()]))
+        word = m.group(1)
+        if word.lower().replace(" ", "") in ("wineincolors", "wineincolor"):
+            word = "Wine in Colors"
+        out.append(("en", word))
+        pos = m.end()
+    if pos < len(text):
+        out.append(("es", text[pos:]))
+    res = []
+    for l, t in out:
+        if not re.search(r"\w", t):          # solo puntuación: se pega al trozo anterior
+            if res:
+                res[-1] = (res[-1][0], res[-1][1] + t)
+            continue
+        res.append((l, t))
+    return res or [("es", text)]
+
+_FEMALE_HINT = ("elena", "valentina", "elvira", "paloma", "dalia", "ximena", "catalina", "salome", "sofia", "maria",
+                "karla", "marta", "paola", "camila", "tania", "margarita", "karina", "yolanda", "belkys", "ramona",
+                "lorena", "andrea", "teresa")
+
+def _en_voice_for(voice):
+    return "en-US-AvaNeural" if any(h in str(voice).lower() for h in _FEMALE_HINT) else "en-US-AndrewNeural"
+
+def _edge_synth_mixed(segments, voice, out_mp3, rate=None):
+    """Sintetiza segmento a segmento (es con la voz del canal, en con voz inglesa) y los une."""
+    import tempfile, shutil
+    td = tempfile.mkdtemp(prefix="mix_")
+    parts, words, offset = [], [], 0.0
+    try:
+        for i, (lang, txt) in enumerate(segments):
+            v = voice if lang == "es" else _en_voice_for(voice)
+            mp3 = os.path.join(td, f"s{i}.mp3")
+            w = _edge_synth(txt.strip(), v, mp3, rate=rate)
+            wav = os.path.join(td, f"s{i}.wav")
+            filt = "silenceremove=stop_periods=1:stop_duration=0.08:stop_threshold=-45dB:detection=peak"
+            filt = f"areverse,silenceremove=start_periods=1:start_threshold=-45dB:detection=peak,areverse" if i < len(segments) - 1 else "anull"
+            subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", mp3, "-af", filt,
+                            "-ar", "24000", "-ac", "1", wav], check=True)
+            dur = audio_duration(wav)
+            for x in w:
+                words.append({"text": x["text"], "start": x["start"] + offset, "end": min(x["end"], dur) + offset})
+            offset += dur
+            parts.append(wav)
+        lst = os.path.join(td, "l.txt")
+        open(lst, "w").write("".join(f"file '{p}'\n" for p in parts))
+        subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", lst,
+                        "-ar", "24000", "-ac", "1", "-b:a", "128k", out_mp3], check=True)
+        return words
+    finally:
+        shutil.rmtree(td, ignore_errors=True)
+
+def synth_voice(text, voice, out_mp3, rate=None, fallback_voice=None, style=None, with_voice=False, brand_terms=None):
     """Genera la locución en out_mp3 y devuelve las palabras con start/end (segundos).
     voice: id de edge-tts (es-AR-TomasNeural, en-US-AndrewMultilingualNeural...) o
            'gemini:<Nombre>' para Gemini TTS.
@@ -199,7 +279,14 @@ def synth_voice(text, voice, out_mp3, rate=None, fallback_voice=None, style=None
                            check=True)
             words = _align_by_silence(text, out_mp3)
         else:
-            words = _edge_synth(text, voice, out_mp3, rate=rate)
+            segs = foreign_segments(text, brand_terms) if str(voice).lower().startswith("es-") else [("es", text)]
+            if any(l == "en" for l, _ in segs):
+                try:
+                    words = _edge_synth_mixed(segs, voice, out_mp3, rate=rate)
+                except Exception:
+                    words = _edge_synth(text, voice, out_mp3, rate=rate)   # nunca perder el video por esto
+            else:
+                words = _edge_synth(text, voice, out_mp3, rate=rate)
     except Exception:
         if not fallback_voice or fallback_voice == voice or str(fallback_voice).startswith("gemini:"):
             raise
