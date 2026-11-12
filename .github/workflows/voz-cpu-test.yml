@@ -1,0 +1,37 @@
+name: voz-cpu-test
+# Prueba aislada (no toca la fábrica): ¿cuánto tarda Chatterbox clonando una voz en CPU de GitHub?
+on:
+  workflow_dispatch:
+jobs:
+  clon:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - uses: actions/cache@v4
+        with: { path: ~/.cache/huggingface, key: hf-chatterbox-v1 }
+      - name: Instalar
+        run: |
+          sudo apt-get install -y -q ffmpeg >/dev/null 2>&1 || true
+          pip install -q torch torchaudio --index-url https://download.pytorch.org/whl/cpu
+          pip install -q chatterbox-tts 'setuptools<81'
+          nproc; free -g | head -2
+      - name: Generar
+        run: |
+          curl -sL -o ref.wav "https://ecbwzrkxsetrwdvzkwkm.supabase.co/storage/v1/object/public/videos/pilot-ugc/lucas_ref.wav"
+          cat > t.py <<'PY'
+          import time, resource, torch, torchaudio as ta
+          import perth
+          if perth.PerthImplicitWatermarker is None: perth.PerthImplicitWatermarker = perth.DummyWatermarker
+          from chatterbox.mtl_tts import ChatterboxMultilingualTTS
+          t0=time.time(); m=ChatterboxMultilingualTTS.from_pretrained(device="cpu"); print("carga", round(time.time()-t0), "s", flush=True)
+          txt="Cinco bodegas para visitar en San Rafael, Mendoza. Bianchi, desde mil novecientos veintiocho: podés ser enólogo por un día. Alfredo Roca: picnic y yoga entre viñedos."
+          t1=time.time(); w=m.generate(txt, language_id="es", audio_prompt_path="ref.wav")
+          dur=w.shape[-1]/m.sr; el=time.time()-t1
+          print(f"RESULTADO audio={dur:.1f}s tiempo={el:.0f}s ratio={el/dur:.1f}x RAM_pico={resource.getrusage(resource.RUSAGE_SELF).ru_maxrss/1e6:.1f}GB")
+          ta.save("clon_cpu.wav", w, m.sr)
+          PY
+          python t.py 2>&1 | grep -v -i warn | tail -15
+      - uses: actions/upload-artifact@v4
+        with: { name: clon_cpu, path: clon_cpu.wav }
