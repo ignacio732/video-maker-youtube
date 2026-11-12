@@ -259,7 +259,18 @@ REGLAS PARA LAS KEYWORDS DE STOCK (clave para la credibilidad del video):
 - OJO con palabras cortas ambiguas en inglés (ej. "spring" es resorte PERO también primavera;
   "tube" es tubo PERO en bancos de stock trae mayormente tubos de laboratorio): si una keyword
   puede confundirse, usá SIEMPRE una frase de 2-3 palabras que la desambigüe
-  (ej. "metal coil spring" en vez de "spring"; "ink cartridge tube" en vez de "tube")."""
+  (ej. "metal coil spring" en vez de "spring"; "ink cartridge tube" en vez de "tube").
+REGLA DE ENTIDADES PUNTUALES (evita confundir al espectador):
+- Si una frase nombra una entidad concreta (una bodega, un hotel, un negocio, un edificio, una persona, una
+  marca o un lugar específico), las keywords e image_prompt de ESA frase NO deben mostrar esa entidad ni
+  sugerir otro lugar/país/marca: el stock casi nunca es la bodega real y puede ser de otro país.
+  Usá una escena GENÉRICA de la actividad o categoría (ej. "winery tasting table", "vineyard rows at sunset",
+  "wine barrels cellar") y, si el video es de un país o región, anclala a ese lugar ("mendoza vineyard andes").
+  Nada de fachadas, carteles, logos o monumentos reconocibles de otro sitio.
+- Solo se muestra la entidad real si el video trae su foto oficial (captura de la fuente); en el resto, imagen genérica.
+- Palabras o marcas en inglés: escribilas SIEMPRE tal cual en inglés (Wine in Colors, wine tasting) para que
+  se pronuncien con el idioma correcto.
+"""
 
 def _extract_json(s):
     s = re.sub(r"<think>.*?</think>", "", s or "", flags=re.DOTALL).strip()
@@ -819,7 +830,18 @@ Devolvé SOLO un JSON con esta forma EXACTA:
   ]
 }}
 {seg_hint}
-Keywords SIEMPRE en inglés, concretas y filmables (nada abstracto)."""
+Keywords SIEMPRE en inglés, concretas y filmables (nada abstracto).
+REGLA DE ENTIDADES PUNTUALES (evita confundir al espectador):
+- Si una frase nombra una entidad concreta (una bodega, un hotel, un negocio, un edificio, una persona, una
+  marca o un lugar específico), las keywords e image_prompt de ESA frase NO deben mostrar esa entidad ni
+  sugerir otro lugar/país/marca: el stock casi nunca es la bodega real y puede ser de otro país.
+  Usá una escena GENÉRICA de la actividad o categoría (ej. "winery tasting table", "vineyard rows at sunset",
+  "wine barrels cellar") y, si el video es de un país o región, anclala a ese lugar ("mendoza vineyard andes").
+  Nada de fachadas, carteles, logos o monumentos reconocibles de otro sitio.
+- Solo se muestra la entidad real si el video trae su foto oficial (captura de la fuente); en el resto, imagen genérica.
+- Palabras o marcas en inglés: escribilas SIEMPRE tal cual en inglés (Wine in Colors, wine tasting) para que
+  se pronuncien con el idioma correcto.
+"""
     messages = [{"role": "system", "content": SYSTEM}, {"role": "user", "content": prompt}]
     raw = _call_script(messages, vtype)
     data = _check_money(channel, _enforce_voseo(channel, _extract_json(raw)))
