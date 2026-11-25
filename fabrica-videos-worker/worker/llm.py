@@ -522,6 +522,59 @@ def alt_hook(data, channel):
     alt = (_extract_json(raw).get("hook") or "").strip()
     return alt if alt and alt.lower() != original.strip().lower() else None
 
+def bridge_avatar_intro(channel, data, clip_line, allow_rewrite=True):
+    """Coherencia avatar -> video. El clip del avatar (frase ya grabada, del pool) se pega
+    delante del video; la frase tiene que enlazar con lo que viene. Una llamada al LLM:
+    puntúa el encaje y, si hace falta, reescribe SOLO la primera oración de la narración
+    para que continúe la frase del avatar (sin segundo gancho ni promesas que el guion no
+    cumple). Devuelve {"ok": bool, "score": int, "first": str|None} o None si el LLM no
+    está disponible (el llamador sigue como antes, sin bloquear el video)."""
+    segs = data.get("segments") or []
+    if not segs:
+        return None
+    first0 = (segs[0].get("text") or "").strip()
+    rest = " ".join((sg.get("text") or "").strip() for sg in segs[1:5])
+    rio = _is_rioplatense(channel)
+    prompt = (
+        f"Video corto. Título: {data.get('title', '')}\n"
+        f"Frase que dice el presentador en cámara justo ANTES de que empiece el video (ya grabada, no se puede cambiar): "
+        f"\"{clip_line}\"\n"
+        f"Primera oración de la narración: \"{first0}\"\n"
+        f"Siguientes oraciones (contexto): {rest}\n\n"
+        "Evaluá cómo se siente el paso de la frase del presentador a la narración (0 a 10):\n"
+        "- 0-3: la frase habla de otra cosa, o promete algo (un truco, un secreto, una revelación, 'no lo puedo creer') "
+        "que el video no entrega, o la narración arranca con un segundo gancho que repite/choca.\n"
+        "- 8-10: la frase abre el tema y la narración la continúa de forma natural.\n"
+        + ("Después escribí la PRIMERA ORACIÓN de la narración de nuevo, para que continúe la frase del presentador: "
+           "entra directo al tema del video, sin saludar ni repetir el gancho, sin cifras ni datos nuevos que no estén "
+           "en el guion, máximo 22 palabras, mismo idioma"
+           + (", voseo rioplatense (nunca tuteo)" if rio else "")
+           + ". Si la frase del presentador hace una promesa que el guion no cumple, devolvé score_after bajo "
+           "(no inventes el contenido).\n" if allow_rewrite else
+           "No reescribas nada: devolvé first igual a la original.\n")
+        + 'Devolvé SOLO JSON: {"score_before": n, "first": "...", "score_after": n}'
+    )
+    try:
+        raw = _call([{"role": "system", "content": "Respondés SIEMPRE en JSON válido, sin texto extra."},
+                     {"role": "user", "content": prompt}])
+        j = _extract_json(raw)
+        before = int(j.get("score_before"))
+        after = int(j.get("score_after", before))
+        first = (j.get("first") or "").strip()
+    except Exception as e:
+        print(f"[avatar-bridge] no disponible: {e}")
+        return None
+    if not allow_rewrite or not first or first == first0 or len(first.split()) > 30:
+        return {"ok": before >= 7, "score": before, "first": None}
+    if before >= 8:                      # ya enlaza bien: no tocar la narración
+        return {"ok": True, "score": before, "first": None}
+    if after >= 7:
+        if rio:
+            tmp = _enforce_voseo(channel, {"segments": [{"text": first}]})
+            first = ((tmp.get("segments") or [{}])[0].get("text") or first).strip()
+        return {"ok": True, "score": after, "first": first}
+    return {"ok": False, "score": max(before, after), "first": None}
+
 # Largo mínimo del guion (palabras narradas). Algunos modelos de respaldo devuelven 1-2
 # frases y salían shorts de 5 segundos (oct-2026). Short objetivo: 18-28 s ≈ 50-75 palabras.
 MIN_WORDS = {"short": 40, "long": 300}
