@@ -108,8 +108,8 @@ HOOK_PATTERNS = {
                    "genuine, unscripted-looking shock, head tilted slightly, as if just seeing "
                    "something themselves.",
         "lines": {
-            "es": ["No... no puedo creer que nadie me haya dicho esto antes.",
-                   "Tuve que verlo dos veces para creerlo."],
+            "es": ["No... esto casi nadie lo explica bien.",
+                   "Esperá, esto cambia cómo lo mirás."],
             "en": ["I... I can't believe nobody told me this sooner.",
                    "I had to see it twice to believe it."],
             "pt": ["Eu... eu não acredito que ninguém me contou isso antes.",
@@ -598,7 +598,7 @@ def channel_for_avatar(channel, avatar):
     return merged
 
 
-def hook_brief(channel, mode="intro", hook_pattern_key=None):
+def hook_brief(channel, mode="intro", hook_pattern_key=None, theme=None):
     """Guía para ESCRIBIR una frase nueva de un patrón (la usa la tarea diaria de
     reposición para que los ganchos no se repitan): devuelve el nombre del patrón, la
     intención/puesta en escena y las frases de ejemplo (solo como referencia de tono,
@@ -612,7 +612,15 @@ def hook_brief(channel, mode="intro", hook_pattern_key=None):
     else:
         hp = persona["hooks"].get(hook_pattern_key) or HOOK_PATTERNS[hook_pattern_key]
     return {"label": hp["label"], "staging": hp["staging"], "examples": hp["lines"][lang],
-            "rules": ("Una sola frase (o dos muy cortas), 6 a 14 palabras, que funcione con CUALQUIER "
-                      "video del canal (sin cifras, fechas ni nombres concretos), en el registro de la "
-                      "persona, distinta de las frases que este avatar ya dijo. Si el acento es "
-                      "rioplatense, con voseo (tenés, mirá, escuchá) — nunca tuteo.")}
+            "rules": ("Una sola frase (o dos muy cortas), 6 a 14 palabras, en el registro de la persona, "
+                      "distinta de las frases que este avatar ya dijo. Si el acento es rioplatense, con "
+                      "voseo (tenés, mirá, escuchá) — nunca tuteo. "
+                      + (f"TEMÁTICA de este clip: «{theme}». La frase tiene que abrir esa temática "
+                         "(sin cifras, fechas ni nombres concretos) y guardá el mismo `theme` al cargar el clip "
+                         "en avatar_clips, para que el worker lo use con videos de ese tema. "
+                         if theme else
+                         "Que funcione con CUALQUIER video del canal (sin cifras, fechas ni nombres concretos): "
+                         "una apertura neutra y abierta, que anuncie 'esto que sigue' y nada más. ")
+                      + "PROHIBIDO prometer algo que el video quizá no entrega: nada de 'truco', 'secreto', "
+                        "'no puedo creer', 'tuve que verlo dos veces', 'cambió mi vida', 'te cuento algo que nadie sabe'. "
+                        "La frase debe poder enlazar con cualquier narración que empiece directo en el tema.")}
