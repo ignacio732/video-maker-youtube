@@ -404,6 +404,16 @@ def process_video(v):
         # que la narración pueda usar la voz que corresponde a ese avatar (ej. si sale el
         # conductor, voz masculina; si sale la conductora, femenina).
         avatar = _choose_avatar(v, ch, vtype)
+        # Avatar ↔ guion: el clip de intro (frase ya grabada) se elige ACÁ, antes de la voz, y la
+        # narración se ajusta para continuarlo. Si ningún clip enlaza con el tema, el video sale
+        # sin avatar en vez de abrir con una frase que no tiene nada que ver (nov-2026).
+        intro_pre, intro_skip = None, False
+        try:
+            if (ch.get("avatar_enabled") and vtype == "short" and avatar
+                    and (ch.get("avatar_mode") or "intro").lower() in ("intro", "intro_outro")):
+                intro_pre, intro_skip = _pick_intro_for_script(ch, avatar, data, vid, bool(us_raw))
+        except Exception as e:
+            db.log("avatar", f"No se pudo cotejar el avatar con el guion: {e}", "warn", vid, ch["id"])
         # Voz y ritmo: lo elegido para ESTE video (dashboard → Nuevo video) tiene prioridad;
         # después la voz del avatar elegido (si el canal pide coherencia); después la del
         # canal; si no, el default por idioma / TTS_RATE.
@@ -431,15 +441,6 @@ def process_video(v):
             headline = (data.get("thumbnail_text") or data.get("title") or "").strip() or None
         # Si el short abre con una intro de avatar, el titular va sobre la intro (que es el
         # primer plano del video) y no se repite al arrancar la narración.
-        intro_pre = None
-        try:
-            if (ch.get("avatar_enabled") and vtype == "short" and avatar
-                    and (ch.get("avatar_mode") or "intro").lower() in ("intro", "intro_outro")):
-                intro_pre = db.get_ready_avatar_clip(
-                    ch["id"], "intro", avatar=avatar,
-                    topic=f"{data.get('title') or ''} {data.get('full_text') or ''}")
-        except Exception:
-            intro_pre = None
         ass = render.build_ass(words, os.path.join(td, "subs.ass"), w=w, h=h,
                                headline=None if intro_pre else headline,
                                accent=ch.get("accent_color"))
@@ -603,7 +604,7 @@ def process_video(v):
             mode = (ch.get("avatar_mode") or "intro").lower()
             if mode in ("intro", "intro_outro"):
                 try:
-                    intro = intro_pre or db.get_ready_avatar_clip(
+                    intro = intro_pre if (intro_pre or intro_skip) else db.get_ready_avatar_clip(
                         ch["id"], "intro", avatar=avatar,
                         topic=f"{data.get('title') or ''} {data.get('full_text') or ''}")
                     outro = db.get_ready_avatar_clip(ch["id"], "outro", prefer_wardrobe=(intro or {}).get("wardrobe"),
@@ -641,6 +642,8 @@ def process_video(v):
                                          f"hook '{intro.get('hook_pattern')}', "
                                          f"vestuario '{intro.get('wardrobe')}'"
                                          + (" + cierre" if outro else ""), vid=vid, cid=ch["id"])
+                    elif intro_skip:
+                        pass   # ya se registró por qué (ningún clip enlazaba con el guion)
                     else:
                         db.log("avatar", "Canal con avatar activado pero sin clips listos en el pool "
                                          "(avatar_clips) — este video sale sin avatar", "warn", vid, ch["id"])
@@ -726,6 +729,42 @@ def process_video(v):
         db.update_video(vid, status="ready", error=None)  # limpia avisos de reintentos previos
         if not ch.get("autonomous"):
             publish_video(vid, ch, data, video_url, thumb_url, vtype=vtype)
+
+def _pick_intro_for_script(ch, avatar, data, vid, own_script=False):
+    """Elige el clip de intro del avatar que mejor enlaza con ESTE guion. Hasta 3 candidatos del
+    pool: para cada uno, llm.bridge_avatar_intro puntúa el encaje y, si hace falta, reescribe la
+    primera oración de la narración para que continúe la frase del avatar (no se toca un guion
+    propio del usuario). Devuelve (clip, skip): skip=True si ninguno enlaza → sin avatar."""
+    topic = f"{data.get('title') or ''} {data.get('full_text') or ''}"
+    tried = []
+    for _ in range(3):
+        clip = db.get_ready_avatar_clip(ch["id"], "intro", avatar=avatar, topic=topic, exclude_ids=tried)
+        if not clip:
+            break
+        tried.append(clip["id"])
+        line = (clip.get("transcript") or "").strip()
+        if not line:
+            return clip, False
+        res = llm.bridge_avatar_intro(ch, data, line, allow_rewrite=not own_script)
+        if res is None:                      # LLM sin cupo: no bloquear el video, como antes
+            return clip, False
+        if res["ok"]:
+            if res.get("first"):
+                old_first = data["segments"][0]["text"]
+                data["segments"][0]["text"] = res["first"]
+                data["full_text"] = " ".join(sg["text"].strip() for sg in data["segments"])
+                db.update_script(vid, data["full_text"], data["segments"])
+                db.log("avatar", f"Narración enlazada con el avatar (\"{line[:60]}\"): "
+                                 f"«{old_first[:70]}» → «{res['first'][:70]}»", vid=vid, cid=ch["id"])
+            else:
+                db.log("avatar", f"Avatar enlaza con el guion (puntaje {res['score']}): \"{line[:70]}\"",
+                       vid=vid, cid=ch["id"])
+            return clip, False
+        db.log("avatar", f"Clip descartado por no enlazar con el tema (puntaje {res['score']}): \"{line[:70]}\"",
+               "warn", vid, ch["id"])
+    db.log("avatar", "Ningún clip del pool enlaza con este guion — el video sale sin avatar",
+           "warn", vid, ch["id"])
+    return None, True
 
 def _choose_avatar(v, ch, vtype):
     """Decide qué avatar lleva este video (o ninguno). Respeta, en orden:
