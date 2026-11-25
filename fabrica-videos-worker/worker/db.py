@@ -319,6 +319,9 @@ def add_script(vid, full_text, segments):
     return _post("scripts", {"video_id": vid, "full_text": full_text,
                              "segments": segments})[0]
 
+def update_script(vid, full_text, segments):
+    return _patch("scripts", {"video_id": f"eq.{vid}"}, {"full_text": full_text, "segments": segments})
+
 def add_asset(vid, kind, url=None, storage_path=None, meta=None):
     return _post("assets", {"video_id": vid, "kind": kind, "url": url,
                             "storage_path": storage_path, "meta": meta or {}})[0]
@@ -450,7 +453,7 @@ def _topic_words(text):
     t = "".join(c for c in t if unicodedata.category(c) != "Mn")
     return {w for w in re.findall(r"[a-z]{4,}", t) if w not in _TOPIC_STOP}
 
-def get_ready_avatar_clip(cid, mode="intro", prefer_wardrobe=None, avatar=None, topic=None):
+def get_ready_avatar_clip(cid, mode="intro", prefer_wardrobe=None, avatar=None, topic=None, exclude_ids=None):
     """Devuelve un clip listo del pool de este canal para el modo pedido, rotando:
     evita repetir el mismo patrón de hook o el mismo vestuario que la última vez
     (channels.avatar_last_hook_pattern / avatar_last_wardrobe) y, entre los que
@@ -466,6 +469,8 @@ def get_ready_avatar_clip(cid, mode="intro", prefer_wardrobe=None, avatar=None, 
         ch = {"avatar_last_hook_pattern": avatar.get("last_hook_pattern"),
               "avatar_last_wardrobe": avatar.get("last_wardrobe")}
     rows = _get("avatar_clips", params)
+    if exclude_ids:
+        rows = [r for r in rows if r["id"] not in set(exclude_ids)]
     if not rows:
         return None
     if prefer_wardrobe:
@@ -483,7 +488,7 @@ def get_ready_avatar_clip(cid, mode="intro", prefer_wardrobe=None, avatar=None, 
         # Palabras que aparecen en muchas frases del pool (p. ej. "vino" en un canal de
         # vinos) no distinguen nada: se ignoran para no anular la rotación.
         from collections import Counter
-        bags = [_topic_words(r.get("transcript")) for r in rows]
+        bags = [_topic_words(f'{r.get("transcript") or ""} {r.get("theme") or ""}') for r in rows]
         df = Counter(w for b in bags for w in b)
         common = {w for w, n in df.items() if len(rows) >= 3 and n > len(rows) / 4}
         tw = _topic_words(topic) - common
